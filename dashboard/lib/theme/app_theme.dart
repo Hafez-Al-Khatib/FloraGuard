@@ -23,12 +23,28 @@ class AppColors {
   static const glassBorderHover = Color.fromRGBO(74, 117, 89, 0.35);
   static const sageFaint = Color.fromRGBO(74, 117, 89, 0.12);
 
+  /// Recessed input/panel fill — darker than the glass so fields read as
+  /// cut INTO the card. One token instead of the 6 inline copies it replaces.
+  static const insetFill = Color.fromRGBO(10, 18, 11, 0.6);
+
   static const textPrimary = Color(0xFFF4F7F5); // Crisp Off-White
   static const textSecondary = Color(0xFF8FA899); // Muted Eucalyptus Green
 
   static const health = Color(0xFF3BD16F); // Vibrant Chlorophyll Green
   static const warning = Color(0xFFD9A05B); // Dry Straw Gold
   static const alert = Color(0xFFE06666); // Wilted Rust Red
+}
+
+/// Motion scale. Every animation in the app draws from these four durations
+/// and two curves so the whole console moves with one rhythm.
+class AppMotion {
+  AppMotion._();
+  static const fast = Duration(milliseconds: 150); // hover, press
+  static const base = Duration(milliseconds: 250); // state changes, fades
+  static const slow = Duration(milliseconds: 600); // gauges, bars, reveals
+  static const draw = Duration(milliseconds: 900); // chart draw-in, sweeps
+  static const curve = Curves.easeOutCubic;
+  static const emphasize = Curves.easeOutQuart;
 }
 
 /// Monospace stack for high-density telemetry readouts. Uses platform/system

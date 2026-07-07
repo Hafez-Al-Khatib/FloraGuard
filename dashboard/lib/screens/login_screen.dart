@@ -125,7 +125,12 @@ class _LoginScreenState extends State<LoginScreen> {
                       ),
                     ],
                     const SizedBox(height: AppSpace.lg),
-                    _ConnectButton(loading: _loading, onTap: _login),
+                    CommandButton(
+                      label: 'ESTABLISH LINK',
+                      expand: true,
+                      loading: _loading,
+                      onTap: _login,
+                    ),
                   ],
                 ),
               ),
@@ -180,7 +185,7 @@ class _GlassField extends StatelessWidget {
         contentPadding: const EdgeInsets.symmetric(
             horizontal: AppSpace.md, vertical: 14),
         filled: true,
-        fillColor: const Color.fromRGBO(10, 18, 11, 0.6),
+        fillColor: AppColors.insetFill,
         enabledBorder: const OutlineInputBorder(
           borderRadius: BorderRadius.zero,
           borderSide: BorderSide(color: AppColors.glassBorder),
@@ -194,47 +199,3 @@ class _GlassField extends StatelessWidget {
   }
 }
 
-class _ConnectButton extends StatelessWidget {
-  final bool loading;
-  final VoidCallback onTap;
-  const _ConnectButton({required this.loading, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: double.infinity,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: loading ? null : onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: AppColors.health.withValues(alpha: 0.12),
-              border: Border.all(
-                  color: AppColors.health.withValues(alpha: 0.45), width: 1),
-            ),
-            child: loading
-                ? const SizedBox(
-                    height: 16,
-                    width: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppColors.health,
-                    ),
-                  )
-                : Text(
-                    'ESTABLISH LINK',
-                    style: AppText.monoCaption.copyWith(
-                      color: AppColors.health,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 1.5,
-                    ),
-                  ),
-          ),
-        ),
-      ),
-    );
-  }
-}

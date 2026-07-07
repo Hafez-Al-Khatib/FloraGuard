@@ -267,7 +267,7 @@ class _AutomationScreenState extends State<AutomationScreen> {
           _field('Cooldown between runs (seconds)', _cooldown),
           _field('Daily runtime cap (seconds)', _dailyCap),
           const SizedBox(height: AppSpace.md),
-          _CommandBtn(label: 'SAVE SETPOINTS', onTap: _saving ? null : _saveSetpoints),
+          CommandButton(label: 'SAVE SETPOINTS', onTap: _saving ? null : _saveSetpoints),
         ],
       ),
     );
@@ -291,7 +291,7 @@ class _AutomationScreenState extends State<AutomationScreen> {
                 contentPadding:
                     const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
                 filled: true,
-                fillColor: const Color.fromRGBO(10, 18, 11, 0.6),
+                fillColor: AppColors.insetFill,
                 enabledBorder: const OutlineInputBorder(
                   borderRadius: BorderRadius.zero,
                   borderSide: BorderSide(color: AppColors.glassBorder),
@@ -316,7 +316,7 @@ class _AutomationScreenState extends State<AutomationScreen> {
           Row(
             children: [
               const Expanded(child: SectionLabel('Audit Log // Decisions')),
-              _CommandBtn(label: 'REFRESH', onTap: _load),
+              CommandButton(label: 'REFRESH', onTap: _load),
             ],
           ),
           const SizedBox(height: AppSpace.sm),
@@ -339,30 +339,3 @@ class _AutomationScreenState extends State<AutomationScreen> {
   }
 }
 
-class _CommandBtn extends StatelessWidget {
-  final String label;
-  final VoidCallback? onTap;
-  const _CommandBtn({required this.label, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final c = onTap == null ? AppColors.textSecondary : AppColors.health;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: AppSpace.md, vertical: 10),
-          decoration: BoxDecoration(
-            color: c.withValues(alpha: 0.12),
-            border: Border.all(color: c.withValues(alpha: 0.45)),
-          ),
-          child: Text(label,
-              style: AppText.monoCaption.copyWith(
-                  color: c, fontWeight: FontWeight.w700, letterSpacing: 1.2)),
-        ),
-      ),
-    );
-  }
-}

@@ -237,6 +237,90 @@ class _LiveIndicatorState extends State<LiveIndicator>
   }
 }
 
+/// THE command button: thin colored border, translucent fill, uppercase mono
+/// label. Replaces the three hand-rolled copies that used to live in the node
+/// detail, automation and chat panels. Sharp corners by design.
+class CommandButton extends StatelessWidget {
+  final String? label;
+  final IconData? icon;
+  final Color color;
+  final VoidCallback? onTap;
+  final bool loading;
+  final bool expand;
+
+  const CommandButton({
+    super.key,
+    this.label,
+    this.icon,
+    this.color = AppColors.health,
+    required this.onTap,
+    this.loading = false,
+    this.expand = false,
+  }) : assert(label != null || icon != null);
+
+  @override
+  Widget build(BuildContext context) {
+    final disabled = onTap == null || loading;
+    final c = disabled ? color.withValues(alpha: 0.55) : color;
+    final child = AnimatedContainer(
+      duration: AppMotion.fast,
+      curve: AppMotion.curve,
+      padding: EdgeInsets.symmetric(
+        horizontal: label != null ? AppSpace.md : 12,
+        vertical: label != null ? 12 : 12,
+      ),
+      alignment: expand ? Alignment.center : null,
+      decoration: BoxDecoration(
+        color: c.withValues(alpha: 0.12),
+        border: Border.all(color: c.withValues(alpha: 0.45), width: 1),
+      ),
+      child: loading
+          ? SizedBox(
+              height: 14,
+              width: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: c),
+            )
+          : Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                if (icon != null) Icon(icon, size: 15, color: c),
+                if (icon != null && label != null)
+                  const SizedBox(width: AppSpace.sm),
+                if (label != null)
+                  Text(
+                    label!.toUpperCase(),
+                    style: AppText.monoCaption.copyWith(
+                      color: c,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+              ],
+            ),
+    );
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: disabled ? null : onTap,
+        child: expand ? SizedBox(width: double.infinity, child: child) : child,
+      ),
+    );
+  }
+}
+
+/// The app's one snackbar/toast style (replaces per-screen `_toast` copies).
+void showAppToast(BuildContext context, String msg) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(msg, style: AppText.monoValue),
+      backgroundColor: AppColors.bgLift,
+      behavior: SnackBarBehavior.floating,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+    ),
+  );
+}
+
 /// Background wash: a subtle monochromatic vertical gradient so the glass blur
 /// has gentle tonal variation to refract. Deliberately not a colorful bubble.
 class NatureBackground extends StatelessWidget {

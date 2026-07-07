@@ -142,13 +142,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _toast(String msg) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg, style: AppText.monoValue),
-        backgroundColor: const Color(0xFF0E1A11),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+    showAppToast(context, msg);
   }
 
   /// Open the SSE feed and apply each event as a delta to the matching card.
@@ -418,7 +412,7 @@ class _AlertsBarState extends State<_AlertsBar> {
       padding: const EdgeInsets.only(top: AppSpace.md),
       child: Container(
         decoration: BoxDecoration(
-          color: const Color.fromRGBO(10, 18, 11, 0.6),
+          color: AppColors.insetFill,
           border: Border.all(
             color: _severityColor(latest['severity'] as String?)
                 .withValues(alpha: 0.5),
@@ -745,7 +739,7 @@ class _NodeSelector extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: AppSpace.sm),
             decoration: BoxDecoration(
-              color: const Color.fromRGBO(10, 18, 11, 0.6),
+              color: AppColors.insetFill,
               border: Border.all(color: AppColors.glassBorder),
             ),
             child: DropdownButtonHideUnderline(
@@ -753,7 +747,7 @@ class _NodeSelector extends StatelessWidget {
                 isExpanded: true,
                 isDense: true,
                 value: selected,
-                dropdownColor: const Color(0xFF0E1A11),
+                dropdownColor: AppColors.bgLift,
                 borderRadius: BorderRadius.zero,
                 icon: const Icon(Icons.expand_more,
                     size: 16, color: AppColors.textSecondary),
@@ -788,7 +782,7 @@ class _ChatBubble extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(AppSpace.sm),
       decoration: BoxDecoration(
-        color: const Color.fromRGBO(10, 18, 11, 0.5),
+        color: AppColors.insetFill,
         border: Border(left: BorderSide(color: accent, width: 2)),
       ),
       child: Column(
@@ -831,7 +825,7 @@ class _ChatInput extends StatelessWidget {
               contentPadding: const EdgeInsets.symmetric(
                   horizontal: AppSpace.md, vertical: 12),
               filled: true,
-              fillColor: const Color.fromRGBO(10, 18, 11, 0.6),
+              fillColor: AppColors.insetFill,
               enabledBorder: const OutlineInputBorder(
                 borderRadius: BorderRadius.zero,
                 borderSide: BorderSide(color: AppColors.glassBorder),
@@ -844,22 +838,7 @@ class _ChatInput extends StatelessWidget {
           ),
         ),
         const SizedBox(width: AppSpace.sm),
-        Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onSend,
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppColors.health.withValues(alpha: 0.12),
-                border: Border.all(
-                    color: AppColors.health.withValues(alpha: 0.45)),
-              ),
-              child: const Icon(Icons.arrow_upward,
-                  size: 16, color: AppColors.health),
-            ),
-          ),
-        ),
+        CommandButton(icon: Icons.arrow_upward, onTap: onSend),
       ],
     );
   }

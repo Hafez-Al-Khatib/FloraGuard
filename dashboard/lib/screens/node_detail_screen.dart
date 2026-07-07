@@ -93,7 +93,7 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(msg, style: AppText.monoValue),
-        backgroundColor: const Color(0xFF0E1A11),
+        backgroundColor: AppColors.bgLift,
         behavior: SnackBarBehavior.floating,
       ),
     );
@@ -578,57 +578,25 @@ class _ActuatorPanel extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: _CommandButton(
+                child: CommandButton(
                   label: 'IRRIGATE ON',
                   color: AppColors.health,
+                  expand: true,
                   onTap: onOn,
                 ),
               ),
               const SizedBox(width: AppSpace.md),
               Expanded(
-                child: _CommandButton(
+                child: CommandButton(
                   label: 'STOP OFF',
                   color: AppColors.alert,
+                  expand: true,
                   onTap: onOff,
                 ),
               ),
             ],
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _CommandButton extends StatelessWidget {
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-  const _CommandButton({
-    required this.label,
-    required this.color,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.12),
-            border: Border.all(color: color.withValues(alpha: 0.45)),
-          ),
-          child: Text(
-            label,
-            style: AppText.monoCaption.copyWith(
-                color: color, fontWeight: FontWeight.w700, letterSpacing: 1.2),
-          ),
-        ),
       ),
     );
   }
@@ -691,7 +659,7 @@ class _VisionPanelState extends State<_VisionPanel> {
             aspectRatio: 4 / 3,
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: const Color.fromRGBO(10, 18, 11, 0.6),
+                color: AppColors.insetFill,
                 border: Border.all(color: AppColors.glassBorder),
               ),
               child: _loadingImage
