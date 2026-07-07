@@ -29,10 +29,13 @@ from services import (
     MqttPublisher,
     TimeSeriesDB,
     TreatmentDB,
+    _to_float,
 )
 
 logger = structlog.get_logger()
 router = APIRouter(prefix="/api/v1")
+
+
 def _client_ip(request: Request) -> str:
     """Rate-limit key: the real client, not the nginx proxy.
 
@@ -448,22 +451,17 @@ async def list_nodes(cache: Cache = Depends(get_cache)) -> dict:
     return {"nodes": await cache.list_nodes()}
 
 
-@router.get(
-    "/node/{node_id}/telemetry",
-    dependencies=[Depends(require_auth)],
-)
-async def latest_telemetry(
-    node_id: str,
-    cache: Cache = Depends(get_cache),
-) -> dict:
-    """Return the latest cached telemetry for a node, normalized for the client."""
-    NodeIdPath(node_id=node_id)
-    raw = await cache.get_all_telemetry(node_id)
-    last_seen = await cache.get_last_seen(node_id)
-    profile = await cache.get_node_profile(node_id)
+async def _node_snapshot(cache: Cache, node_id: str) -> dict:
+    """Latest cached state for one node, normalized for the client."""
+    raw, last_seen, profile, diag, zone_state = await asyncio.gather(
+        cache.get_all_telemetry(node_id),
+        cache.get_last_seen(node_id),
+        cache.get_node_profile(node_id),
+        cache.get_camera_diagnostics(node_id),
+        cache.get_zone_state(node_id),
+    )
 
     # Latest camera detection, if any (issue=="None" means no diagnosis yet).
-    diag = await cache.get_camera_diagnostics(node_id)
     detection = None
     if diag and diag.get("issue") not in (None, "None"):
         detection = {
@@ -473,7 +471,6 @@ async def latest_telemetry(
         }
 
     # Actuator (irrigation zone) state, if this node is a controllable zone.
-    zone_state = await cache.get_zone_state(node_id)
     actuator = None
     if zone_state:
         actuator = {
@@ -483,22 +480,14 @@ async def latest_telemetry(
             "mode": zone_state.get("mode"),
         }
 
-    def _as_float(value: str | None) -> float | None:
-        if value is None:
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
     return {
         "node_id": node_id,
-        "moisture": _as_float(raw.get("moisture")),
+        "moisture": _to_float(raw.get("moisture")),
         # Canonical key is "temperature"; the "temp" fallback drains old cached
         # values written before the rename (safe to drop once caches roll over).
-        "temperature": _as_float(raw.get("temperature", raw.get("temp"))),
-        "ec": _as_float(raw.get("ec")),
-        "battery_pct": _as_float(raw.get("battery_pct")),
+        "temperature": _to_float(raw.get("temperature", raw.get("temp"))),
+        "ec": _to_float(raw.get("ec")),
+        "battery_pct": _to_float(raw.get("battery_pct")),
         # Firmware health diagnostics (populated by the MQTT subscriber when
         # the ESP32 reports them). Used to render a "DIAG" badge on the card.
         "reset_reason": raw.get("reset_reason"),
@@ -512,6 +501,30 @@ async def latest_telemetry(
         # Irrigation actuator state (soil/zone nodes only).
         "actuator": actuator,
     }
+
+
+@router.get(
+    "/node/{node_id}/telemetry",
+    dependencies=[Depends(require_auth)],
+)
+async def latest_telemetry(
+    node_id: str,
+    cache: Cache = Depends(get_cache),
+) -> dict:
+    NodeIdPath(node_id=node_id)
+    return await _node_snapshot(cache, node_id)
+
+
+@router.get(
+    "/nodes/telemetry",
+    dependencies=[Depends(require_auth)],
+)
+async def bulk_telemetry(cache: Cache = Depends(get_cache)) -> dict:
+    """Every node's snapshot in one response — the dashboard grid refresh
+    is one HTTP call instead of one per node."""
+    nodes = await cache.list_nodes()
+    snaps = await asyncio.gather(*(_node_snapshot(cache, n) for n in nodes))
+    return {"nodes": list(snaps)}
 
 
 # ---------- historical telemetry (InfluxDB) ----------

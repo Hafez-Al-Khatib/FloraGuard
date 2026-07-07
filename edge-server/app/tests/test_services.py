@@ -138,13 +138,13 @@ async def test_alert_engine_raises_once_then_clears():
     # Track active-alert state in-memory so de-dup logic is exercised.
     active: set[str] = set()
 
-    async def _is_active(node, kind):
-        return f"{node}:{kind}" in active
+    async def _get_active():
+        return active.copy()
 
     async def _set_active(node, kind, on):
         active.add(f"{node}:{kind}") if on else active.discard(f"{node}:{kind}")
 
-    cache.is_alert_active = _is_active
+    cache.get_active_alerts = _get_active
     cache.set_alert_active = _set_active
 
     engine = AlertEngine(Settings(), cache)

@@ -208,6 +208,10 @@ class Cache:
             await self._text_redis().sismember("alerts:active", f"{node_id}:{kind}")
         )
 
+    async def get_active_alerts(self) -> set[str]:
+        """All active '{node}:{kind}' markers in one round-trip (scan batching)."""
+        return set(await self._text_redis().smembers("alerts:active"))
+
     async def set_alert_active(self, node_id: str, kind: str, active: bool) -> None:
         r = self._text_redis()
         member = f"{node_id}:{kind}"
@@ -752,24 +756,27 @@ class AlertEngine:
     async def _scan(self) -> None:
         s = self._settings
         now = int(time.time())
+        # One SMEMBERS per scan instead of one SISMEMBER per node per kind —
+        # at N nodes that collapses 4N round-trips into 1.
+        active = await self._cache.get_active_alerts()
         for node in await self._cache.list_nodes():
             last_seen = await self._cache.get_last_seen(node)
             offline = last_seen is not None and (now - last_seen) > s.node_offline_seconds
             await self._transition(
                 node, "offline", offline,
-                f"Node offline > {s.node_offline_seconds}s", "warning",
+                f"Node offline > {s.node_offline_seconds}s", "warning", active,
             )
 
             tele = await self._cache.get_all_telemetry(node)
             moisture = _to_float(tele.get("moisture"))
             await self._transition(
                 node, "dry", moisture is not None and moisture < s.moisture_low_threshold,
-                f"Soil moisture low ({moisture}% VWC)", "warning",
+                f"Soil moisture low ({moisture}% VWC)", "warning", active,
             )
             battery = _to_float(tele.get("battery_pct"))
             await self._transition(
                 node, "battery", battery is not None and battery < s.battery_low_threshold,
-                f"Battery low ({battery}%)", "warning",
+                f"Battery low ({battery}%)", "warning", active,
             )
 
             diag = await self._cache.get_camera_diagnostics(node)
@@ -782,19 +789,23 @@ class AlertEngine:
             )
             await self._transition(
                 node, "disease", diseased,
-                f"Disease detected: {issue} ({conf:.0%})", "critical",
+                f"Disease detected: {issue} ({conf:.0%})", "critical", active,
             )
 
     async def _transition(
-        self, node: str, kind: str, active_now: bool, message: str, severity: str
+        self, node: str, kind: str, active_now: bool, message: str, severity: str,
+        active: set[str],
     ) -> None:
-        was_active = await self._cache.is_alert_active(node, kind)
+        member = f"{node}:{kind}"
+        was_active = member in active
         if active_now and not was_active:
             await self._emit(node, kind, severity, message, "raised")
             await self._cache.set_alert_active(node, kind, True)
+            active.add(member)
         elif not active_now and was_active:
             await self._emit(node, kind, severity, f"Recovered: {kind}", "cleared")
             await self._cache.set_alert_active(node, kind, False)
+            active.discard(member)
 
     async def _emit(
         self, node: str, kind: str, severity: str, message: str, state: str

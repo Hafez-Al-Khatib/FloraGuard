@@ -200,6 +200,26 @@ async def test_admin_route_rejects_device_token(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_bulk_telemetry_returns_all_nodes(client: AsyncClient):
+    """One request returns every node's snapshot — the dashboard grid refresh
+    was an N+1 HTTP pattern (one /telemetry call per node)."""
+    mock_cache = AsyncMock()
+    mock_cache.list_nodes = AsyncMock(return_value=["a", "b"])
+    mock_cache.get_all_telemetry = AsyncMock(return_value={"moisture": "40"})
+    mock_cache.get_last_seen = AsyncMock(return_value=1234567890)
+    mock_cache.get_node_profile = AsyncMock(return_value={})
+    mock_cache.get_camera_diagnostics = AsyncMock(return_value={})
+    mock_cache.get_zone_state = AsyncMock(return_value={})
+    app.dependency_overrides[get_cache] = lambda: mock_cache
+
+    response = await client.get("/api/v1/nodes/telemetry", headers=AUTH)
+    assert response.status_code == 200
+    body = response.json()
+    assert {n["node_id"] for n in body["nodes"]} == {"a", "b"}
+    assert body["nodes"][0]["moisture"] == 40.0
+
+
+@pytest.mark.anyio
 async def test_device_token_cannot_post_telemetry_for_other_node(client: AsyncClient):
     """A device principal is scoped to its own node_id — no spoofing."""
     mock_cache = AsyncMock()
