@@ -282,8 +282,25 @@ class Cache:
         }
         await self._text_redis().xadd("logs:automation", entry, maxlen=10000, approximate=True)
 
-    async def publish_telemetry_stream(self, payload: dict) -> None:
-        await self._text_redis().xadd("stream:telemetry", payload, maxlen=50000, approximate=True)
+    EVENT_TYPES = ("telemetry", "alert", "detection", "actuator", "online")
+
+    async def emit_event(self, event_type: str, node_id: str, payload: dict) -> None:
+        """Single door onto the SSE stream — every event is a typed envelope.
+
+        The dashboard dispatches on ``data.type`` instead of sniffing payload
+        keys, and only ``telemetry`` events count as device liveness.
+        """
+        if event_type not in self.EVENT_TYPES:
+            raise ValueError(f"unknown event type: {event_type}")
+        await self._text_redis().xadd(
+            "stream:telemetry",
+            {
+                "node_id": node_id,
+                "data": json.dumps({"type": event_type, "payload": payload}),
+            },
+            maxlen=50000,
+            approximate=True,
+        )
 
 
 class TimeSeriesDB:
@@ -790,10 +807,8 @@ class AlertEngine:
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
         await self._cache.add_alert(alert)
-        # Live push to the dashboard via the existing telemetry SSE feed.
-        await self._cache.publish_telemetry_stream(
-            {"node_id": node, "data": json.dumps({"alert": alert})}
-        )
+        # Live push to the dashboard via the typed SSE event stream.
+        await self._cache.emit_event("alert", node, alert)
         _log.info("alert_%s node=%s kind=%s", state, node, kind)
         await self._maybe_webhook(alert)
 
@@ -1075,11 +1090,9 @@ class ControlEngine:
             {"reason": reason, "bound": bound, "mode": cfg["mode"]},
         )
         # Live push so the dashboard reflects actuator state immediately.
-        await self._cache.publish_telemetry_stream({
-            "node_id": zone,
-            "data": json.dumps({"actuator": {
-                "on": bool(on), "reason": reason, "bound": bound, "since": now if on else 0,
-            }}),
+        await self._cache.emit_event("actuator", zone, {
+            "on": bool(on), "reason": reason, "bound": bound,
+            "mode": cfg["mode"], "since": now if on else 0,
         })
         _log.info("actuate zone=%s on=%s reason=%s bound=%s", zone, on, reason, bound)
 
@@ -1215,9 +1228,7 @@ class MQTTSubscriber:
             await self._cache.touch_node(node_id)
             _log.info("mqtt_node_hello node_id=%s", node_id)
             # Tell SSE consumers the card should appear immediately.
-            await self._cache.publish_telemetry_stream(
-                {"node_id": node_id, "data": json.dumps({"online": True})}
-            )
+            await self._cache.emit_event("online", node_id, {})
             return
 
         # Silently skip sentinel readings where sensor reported an error
@@ -1277,9 +1288,7 @@ class MQTTSubscriber:
         client_fields = {
             ("temperature" if k == "temp" else k): v for k, v in fields.items()
         }
-        await self._cache.publish_telemetry_stream(
-            {"node_id": node_id, "data": json.dumps(client_fields)}
-        )
+        await self._cache.emit_event("telemetry", node_id, client_fields)
 
         if self._tsdb is not None:
             try:

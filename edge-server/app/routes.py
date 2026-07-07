@@ -204,12 +204,11 @@ async def _record_detection(
     # Write-once: a detection on a node that also reports soil telemetry must
     # not flip its profile to "camera" (that hides its irrigation controls).
     await cache.note_node_seen(node_id, default_profile={"kind": "camera"})
-    await cache.publish_telemetry_stream({
-        "node_id": node_id,
-        "data": json.dumps({
-            "detection": {"issue": label, "confidence": confidence, "at": detected_at}
-        }),
-    })
+    await cache.emit_event(
+        "detection",
+        node_id,
+        {"issue": label, "confidence": confidence, "at": detected_at},
+    )
     # Safety-first automation: log a suggestion, never actuate without confirmation.
     if label not in TreatmentDB.healthy_labels() and confidence > 0.75:
         await cache.log_automation_decision(
@@ -408,10 +407,7 @@ async def register_node(
         # with the request (ESP32s discard the body on power blips).
         device_token = await cache.get_device_token(node_id)
     # Push to SSE so the dashboard places the card on screen immediately.
-    await cache.publish_telemetry_stream({
-        "node_id": node_id,
-        "data": json.dumps({"online": True, "profile": profile}),
-    })
+    await cache.emit_event("online", node_id, {"profile": profile})
     await logger.ainfo("node_registered", node_id=node_id, profile=profile)
     return {
         "status": "registered",
@@ -753,10 +749,7 @@ async def ingest_telemetry(
         fields["battery_pct"] = payload.battery_pct
 
     # Stream to Redis for real-time consumers
-    await cache.publish_telemetry_stream({
-        "node_id": payload.node_id,
-        "data": json.dumps(fields),
-    })
+    await cache.emit_event("telemetry", payload.node_id, fields)
 
     # Persist to InfluxDB. The influxdb-client write is synchronous (blocking I/O),
     # so run it in a thread to avoid stalling the event loop for every other request.

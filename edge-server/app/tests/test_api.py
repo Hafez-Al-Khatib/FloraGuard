@@ -121,7 +121,7 @@ async def test_register_node_hello(client: AsyncClient):
     """
     mock_cache = AsyncMock()
     mock_cache.register_node = AsyncMock()
-    mock_cache.publish_telemetry_stream = AsyncMock()
+    mock_cache.emit_event = AsyncMock()
     mock_cache.issue_device_token = AsyncMock(return_value="device-token-abc")
     app.dependency_overrides[get_cache] = lambda: mock_cache
 
@@ -139,9 +139,10 @@ async def test_register_node_hello(client: AsyncClient):
     # Each device is issued its own bearer token on pairing.
     assert body["device_token"] == "device-token-abc"
     mock_cache.issue_device_token.assert_awaited_once()
-    # Side effects: persistent pairing + SSE notification
+    # Side effects: persistent pairing + typed SSE "online" event
     mock_cache.register_node.assert_awaited_once()
-    mock_cache.publish_telemetry_stream.assert_awaited_once()
+    mock_cache.emit_event.assert_awaited_once()
+    assert mock_cache.emit_event.await_args.args[0] == "online"
 
 
 @pytest.mark.anyio

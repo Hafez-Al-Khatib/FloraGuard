@@ -72,20 +72,53 @@ async def test_log_automation_decision_serializes_context_to_scalars():
 
 
 @pytest.mark.anyio
-async def test_publish_telemetry_stream_accepts_scalar_payload():
+async def test_emit_event_stream_fields_are_scalars():
+    """Redis stream (XADD) fields must be flat scalars — nested dicts raise
+    redis.exceptions.DataError at runtime."""
     cache = Cache(Settings())
     fake_redis = AsyncMock()
     cache._r = fake_redis
 
-    await cache.publish_telemetry_stream({"node_id": "soil-1", "data": "{\"moisture\": 42}"})
+    await cache.emit_event("telemetry", "soil-1", {"moisture": 42})
 
-    fake_redis.xadd.assert_awaited_once()
     args, _ = fake_redis.xadd.call_args
     entry = args[1]
     for key, value in entry.items():
         assert isinstance(value, (str, int, float, bytes)), (
             f"stream field {key!r} is non-scalar: {value!r}"
         )
+
+
+@pytest.mark.anyio
+async def test_emit_event_wraps_typed_envelope():
+    """Every SSE event goes through one door with a type discriminator, so the
+    client dispatches on data.type instead of sniffing payload keys."""
+    import json as _json
+
+    cache = Cache(Settings())
+    fake_redis = AsyncMock()
+    cache._r = fake_redis
+
+    await cache.emit_event("telemetry", "soil-a", {"moisture": 41.0})
+
+    fake_redis.xadd.assert_awaited_once()
+    args, _ = fake_redis.xadd.call_args
+    assert args[0] == "stream:telemetry"
+    entry = args[1]
+    assert entry["node_id"] == "soil-a"
+    assert _json.loads(entry["data"]) == {
+        "type": "telemetry",
+        "payload": {"moisture": 41.0},
+    }
+
+
+@pytest.mark.anyio
+async def test_emit_event_rejects_unknown_type():
+    cache = Cache(Settings())
+    cache._r = AsyncMock()
+
+    with pytest.raises(ValueError, match="unknown event type"):
+        await cache.emit_event("mystery", "soil-a", {})
 
 
 @pytest.mark.anyio
@@ -138,7 +171,7 @@ def _ingest_cache():
     cache.note_node_seen = AsyncMock()
     cache.touch_node = AsyncMock()
     cache.set_telemetry = AsyncMock()
-    cache.publish_telemetry_stream = AsyncMock()
+    cache.emit_event = AsyncMock()
     return cache
 
 
@@ -152,9 +185,9 @@ async def test_retained_message_does_not_refresh_last_seen():
 
     await sub._ingest({"node_id": "soil-a", "moisture": 40.0}, retained=True)
 
-    cache.set_telemetry.assert_awaited()                    # value still cached
-    cache.touch_node.assert_not_awaited()                   # liveness untouched
-    cache.publish_telemetry_stream.assert_not_awaited()     # no fake-live SSE
+    cache.set_telemetry.assert_awaited()          # value still cached
+    cache.touch_node.assert_not_awaited()         # liveness untouched
+    cache.emit_event.assert_not_awaited()         # no fake-live SSE
 
 
 @pytest.mark.anyio
@@ -165,7 +198,7 @@ async def test_live_message_refreshes_last_seen():
     await sub._ingest({"node_id": "soil-a", "moisture": 40.0}, retained=False)
 
     cache.touch_node.assert_awaited()
-    cache.publish_telemetry_stream.assert_awaited()
+    cache.emit_event.assert_awaited_with("telemetry", "soil-a", {"moisture": 40.0})
 
 
 @pytest.mark.anyio
