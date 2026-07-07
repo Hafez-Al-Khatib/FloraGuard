@@ -59,6 +59,10 @@ class Settings(BaseSettings):
 
     # API Security
     api_auth_token: str = "change-me-in-production"
+    # "development" | "production" — gates the startup token check in main.py.
+    # The prod compose sets ENVIRONMENT=production so a placeholder/empty admin
+    # token refuses to boot instead of silently granting admin.
+    environment: str = "development"
     # CORS: explicit allowlist of browser origins permitted to call the API.
     # Stored as a raw comma-separated string (env: CORS_ALLOW_ORIGINS) to avoid
     # pydantic-settings JSON-decoding a list env value, then exposed as a parsed

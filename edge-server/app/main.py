@@ -43,6 +43,26 @@ def configure_logging() -> None:
     )
 
 
+def _validate_security(settings) -> None:
+    """Refuse to boot with a missing/placeholder admin token.
+
+    An empty token would make ``compare_digest("", token)`` grant admin to an
+    empty Bearer header; the shipped default is public knowledge. Fail loudly
+    instead of running an openly controllable irrigation system.
+    """
+    if not settings.api_auth_token:
+        raise RuntimeError(
+            "API_AUTH_TOKEN is empty. Set it in edge-server/.env before starting."
+        )
+    if (
+        settings.environment == "production"
+        and settings.api_auth_token == "change-me-in-production"
+    ):
+        raise RuntimeError(
+            "API_AUTH_TOKEN is still the default. Set a real token in edge-server/.env."
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create heavyweight service singletons once at startup.
@@ -55,6 +75,7 @@ async def lifespan(app: FastAPI):
     """
     logger = structlog.get_logger()
     settings = get_settings()
+    _validate_security(settings)
 
     app.state.cache = Cache(settings)
     app.state.inference = InferenceEngine(settings)

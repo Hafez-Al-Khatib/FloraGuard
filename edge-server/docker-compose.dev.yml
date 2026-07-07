@@ -1,4 +1,4 @@
-version: "3.9"
+﻿version: "3.9"
 
 # DEVELOPMENT ONLY: runs Mosquitto without TLS, Redis without password, and
 # mounts the API source code live (no rebuild needed for Python changes).
@@ -69,9 +69,10 @@ services:
       - INFLUXDB_ORG=${INFLUXDB_ORG:-plantmonitor}
       - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-telemetry}
       - API_AUTH_TOKEN=${API_AUTH_TOKEN}
+      - ENVIRONMENT=development
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://plant-hub.local,http://localhost:8080}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      # Chat provider — only outbound internet call
+      # Chat provider â€” only outbound internet call
       - CHAT_PROVIDER=${CHAT_PROVIDER:-gemini}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}

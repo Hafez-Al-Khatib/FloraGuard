@@ -1,4 +1,4 @@
-version: "3.9"
+﻿version: "3.9"
 
 services:
   redis:
@@ -93,6 +93,7 @@ services:
       - INFLUXDB_ORG=${INFLUXDB_ORG:-plantmonitor}
       - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-telemetry}
       - API_AUTH_TOKEN=${API_AUTH_TOKEN}
+      - ENVIRONMENT=production
       - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://plant-hub.local}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Chat provider (the only outbound internet call in the system)
@@ -116,7 +117,7 @@ services:
       influxdb:
         condition: service_healthy
     healthcheck:
-      # Route is mounted under the /api/v1 prefix — a bare /health returns 404
+      # Route is mounted under the /api/v1 prefix â€” a bare /health returns 404
       # and would mark the container perpetually unhealthy.
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 15s
@@ -131,7 +132,7 @@ services:
     restart: unless-stopped
     networks:
       - pms-net
-    # No ports exposed — nginx is the only entry point
+    # No ports exposed â€” nginx is the only entry point
 
   nginx:
     image: nginx:alpine

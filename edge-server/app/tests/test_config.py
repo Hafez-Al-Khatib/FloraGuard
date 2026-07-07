@@ -18,3 +18,28 @@ def test_cors_origins_parsed_from_comma_string(monkeypatch):
 def test_cors_origins_default_is_not_wildcard():
     settings = Settings()
     assert "*" not in settings.cors_allow_origins
+
+
+def test_empty_token_always_fatal():
+    import pytest
+    from main import _validate_security
+
+    s = Settings(api_auth_token="", environment="development")
+    with pytest.raises(RuntimeError, match="API_AUTH_TOKEN"):
+        _validate_security(s)
+
+
+def test_default_token_fatal_in_production():
+    import pytest
+    from main import _validate_security
+
+    s = Settings(api_auth_token="change-me-in-production", environment="production")
+    with pytest.raises(RuntimeError, match="default"):
+        _validate_security(s)
+
+
+def test_default_token_allowed_in_development():
+    from main import _validate_security
+
+    s = Settings(api_auth_token="change-me-in-production", environment="development")
+    _validate_security(s)  # must not raise
