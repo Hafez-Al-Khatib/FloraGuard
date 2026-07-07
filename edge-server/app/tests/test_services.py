@@ -126,6 +126,22 @@ async def test_alert_engine_raises_once_then_clears():
     assert cache.add_alert.await_count == 2  # cleared emitted once
 
 
+@pytest.mark.anyio
+async def test_effective_config_zero_setpoint_respected():
+    """Regression: `_to_float(v) or default` treated a stored 0 as falsy and
+    fell back to the 30.0 default — the pump kept firing after an operator
+    explicitly disabled irrigation with setpoint 0."""
+    cache = AsyncMock()
+    cache.get_automation_config = AsyncMock(
+        return_value={"moisture_setpoint": "0"}
+    )
+    engine = ControlEngine(Settings(), cache, None)
+
+    cfg = await engine.effective_config()
+
+    assert cfg["moisture_setpoint"] == 0.0  # NOT the 30.0 default
+
+
 # ── ControlEngine safety interlocks ──────────────────────────────────────────
 
 @pytest.mark.anyio

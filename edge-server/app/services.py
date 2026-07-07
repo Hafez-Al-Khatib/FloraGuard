@@ -888,7 +888,9 @@ class ControlEngine:
             cfg["emergency_stop"] = stored["emergency_stop"] in ("1", "true", "True")
         for k in ("moisture_setpoint", "moisture_target"):
             if k in stored:
-                cfg[k] = _to_float(stored[k]) or cfg[k]
+                v = _to_float(stored[k])
+                if v is not None:  # 0 is a legal operator override — `or` isn't
+                    cfg[k] = v
         for k in ("max_run_seconds", "cooldown_seconds", "daily_cap_seconds"):
             if k in stored:
                 v = _to_float(stored[k])
