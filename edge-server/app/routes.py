@@ -30,10 +30,21 @@ from services import (
     TimeSeriesDB,
     TreatmentDB,
     _to_float,
+    utc_now_iso,
 )
 
 logger = structlog.get_logger()
 router = APIRouter(prefix="/api/v1")
+
+
+async def _json_body(request: Request) -> dict:
+    """Lenient optional-JSON-body parse: {} for missing/invalid/non-dict bodies
+    (a JSON list would otherwise 500 on body.get)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
 
 
 def _client_ip(request: Request) -> str:
@@ -200,7 +211,7 @@ async def _record_detection(
     Shared by GET /analyze (operator-triggered) and the auto-analyze on
     POST /upload-frame (autonomous ESP32-CAM / in-app capture).
     """
-    detected_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    detected_at = utc_now_iso()
     await cache.set_camera_diagnostics(
         node_id, {"issue": label, "confidence": confidence, "timestamp": detected_at}
     )
@@ -264,12 +275,7 @@ async def evaluate_crop_health(
     await _record_detection(cache, node_id, label, confidence)
 
     # Attach treatment recommendations when a known disease is detected.
-    treatments = None
-    if label in TreatmentDB._MAPPING and label not in TreatmentDB.healthy_labels():
-        treatments = [
-            {"type": t["type"], "actions": t["actions"]}
-            for t in TreatmentDB.get(label) or []
-        ]
+    treatments = TreatmentDB.treatments_for(label)
 
     return CameraAnalysisResponse(
         node_id=node_id,
@@ -313,12 +319,7 @@ async def latest_diagnostics(
     diag = await cache.get_camera_diagnostics(node_id)
     issue = diag.get("issue", "None")
     healthy = issue in TreatmentDB.healthy_labels() or issue in ("None", "healthy")
-    treatments = None
-    if issue in TreatmentDB._MAPPING and not healthy:
-        treatments = [
-            {"type": t["type"], "actions": t["actions"]}
-            for t in TreatmentDB.get(issue) or []
-        ]
+    treatments = TreatmentDB.treatments_for(issue)
     return {
         "node_id": node_id,
         "issue": issue,
@@ -346,9 +347,7 @@ async def stream_agronomist_chat(
     cache: Cache = Depends(get_cache),
     chat: AgronomistChat = Depends(get_chat),
 ):
-    NodeIdPath(node_id=node_id)
-
-    # Validate and sanitize query
+    # Validate and sanitize (ChatQuery covers node_id too — no double check).
     ChatQuery(node_id=node_id, user_query=user_query)
 
     telemetry = await cache.get_all_telemetry(node_id)
@@ -391,10 +390,7 @@ async def register_node(
     """
     NodeIdPath(node_id=node_id)
     principal.assert_node(node_id)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body = await _json_body(request)
     profile = {
         "kind": str(body.get("kind") or "unknown")[:32],
         "label": str(body.get("label") or "")[:64],
@@ -614,10 +610,7 @@ async def zone_command(
     """Manual actuator override (admin only). Body: {"action": "on" | "off"}.
     OFF is always honored; ON respects emergency-stop + daily cap."""
     NodeIdPath(node_id=zone)
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body = await _json_body(request)
     action = str(body.get("action", "")).lower()
     if action not in ("on", "off"):
         raise HTTPException(
@@ -643,10 +636,7 @@ async def put_automation_config(
     cache: Cache = Depends(get_cache),
 ) -> dict:
     """Update automation overrides: mode, emergency_stop, setpoints, interlocks."""
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
+    body = await _json_body(request)
     updates = {k: v for k, v in body.items() if k in _CONFIG_FIELDS}
     if "mode" in updates and updates["mode"] not in ("advisory", "auto"):
         raise HTTPException(

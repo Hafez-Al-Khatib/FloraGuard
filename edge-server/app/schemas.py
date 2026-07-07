@@ -1,23 +1,20 @@
 """Pydantic request/response models."""
 import re
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
+# THE node-id rule. schemas models, path validation, and the MQTT ingest
+# (services._NODE_ID_RE) all share this single pattern — tightening it in one
+# place must tighten every entry point at once.
 NODE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+NodeId = Annotated[str, StringConstraints(pattern=r"^[a-zA-Z0-9_-]{1,64}$")]
 
 
 class NodeIdPath(BaseModel):
-    node_id: str = Field(..., min_length=1, max_length=64)
-
-    @field_validator("node_id")
-    @classmethod
-    def _validate_node_id(cls, value: str) -> str:
-        if not NODE_ID_PATTERN.match(value):
-            raise ValueError(
-                "node_id must contain only alphanumeric characters, hyphens, and underscores"
-            )
-        return value
+    node_id: NodeId
 
 
 class DiagnosticResult(BaseModel):
@@ -44,17 +41,8 @@ class CameraAnalysisResponse(BaseModel):
 
 
 class ChatQuery(BaseModel):
-    node_id: str = Field(..., min_length=1, max_length=64)
+    node_id: NodeId
     user_query: str = Field(..., min_length=1, max_length=2048)
-
-    @field_validator("node_id")
-    @classmethod
-    def _validate_node_id(cls, value: str) -> str:
-        if not NODE_ID_PATTERN.match(value):
-            raise ValueError(
-                "node_id must contain only alphanumeric characters, hyphens, and underscores"
-            )
-        return value
 
     @field_validator("user_query")
     @classmethod
@@ -64,18 +52,9 @@ class ChatQuery(BaseModel):
 
 
 class TelemetryPayload(BaseModel):
-    node_id: str
+    node_id: NodeId
     moisture: float | None = Field(None, ge=0.0, le=100.0)
     temperature: float | None = Field(None, ge=-50.0, le=80.0)
     ec: float | None = Field(None, ge=0.0)
     battery_pct: float | None = Field(None, ge=0.0, le=100.0)
     timestamp: datetime | None = None
-
-    @field_validator("node_id")
-    @classmethod
-    def _validate_node_id(cls, value: str) -> str:
-        if not NODE_ID_PATTERN.match(value):
-            raise ValueError(
-                "node_id must contain only alphanumeric characters, hyphens, and underscores"
-            )
-        return value

@@ -5,7 +5,6 @@ import asyncio
 import io
 import json
 import logging
-import re
 import secrets
 import time
 from typing import AsyncIterator
@@ -21,6 +20,11 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 from config import Settings, get_settings
 
 _log = logging.getLogger(__name__)
+
+
+def utc_now_iso() -> str:
+    """The wire timestamp format for alerts, detections, and the audit log."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
 class Cache:
@@ -56,9 +60,6 @@ class Cache:
     # ---------- telemetry ----------
     async def set_telemetry(self, node_id: str, field: str, value: str | float, ttl: int = 86400) -> None:
         await self._text_redis().set(f"telemetry:{node_id}:{field}", str(value), ex=ttl)
-
-    async def get_telemetry(self, node_id: str, field: str) -> str | None:
-        return await self._text_redis().get(f"telemetry:{node_id}:{field}")
 
     async def get_all_telemetry(self, node_id: str) -> dict[str, str]:
         # SCAN instead of KEYS: KEYS is O(N) over the whole keyspace and blocks
@@ -242,14 +243,6 @@ class Cache:
             mapping={k: str(v) for k, v in fields.items()},
         )
 
-    async def list_zones(self) -> list[str]:
-        zones: list[str] = []
-        async for key in self._text_redis().scan_iter(
-            match="zone:state:*", count=100
-        ):
-            zones.append(key.removeprefix("zone:state:"))
-        return sorted(zones)
-
     async def get_automation_log(self, count: int = 50) -> list[dict]:
         """Recent automation decisions/actuations from the audit stream."""
         entries = await self._text_redis().xrevrange("logs:automation", count=count)
@@ -279,7 +272,7 @@ class Cache:
         # Redis stream fields must be flat scalars; serialize the nested context
         # to a JSON string rather than passing a dict (which raises DataError).
         entry = {
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "timestamp": utc_now_iso(),
             "node_id": node_id,
             "decision": decision,
             "context": json.dumps(context),
@@ -525,6 +518,20 @@ class TreatmentDB:
     def healthy_labels(cls) -> set[str]:
         return {k for k in cls._MAPPING if "healthy" in k.lower()}
 
+    @classmethod
+    def treatments_for(cls, label: str) -> list[dict] | None:
+        """Client-shaped treatment list for a diseased label, else None.
+
+        The single place that encodes 'healthy/unknown labels get no
+        treatments' — routes must not reach into _MAPPING themselves.
+        """
+        if label not in cls._MAPPING or label in cls.healthy_labels():
+            return None
+        return [
+            {"type": t["type"], "actions": t["actions"]}
+            for t in cls._MAPPING[label]
+        ]
+
 
 class AgronomistChat:
     """Cloud LLM chat supporting Gemini (free tier) and Anthropic Claude (production).
@@ -693,7 +700,7 @@ class AgronomistChat:
                         continue
 
 
-_NODE_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+from schemas import NODE_ID_PATTERN as _NODE_ID_RE  # one id rule for all entry points
 
 
 def _to_float(value) -> float | None:
@@ -816,7 +823,7 @@ class AlertEngine:
             "severity": severity if state == "raised" else "info",
             "state": state,
             "message": message,
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "timestamp": utc_now_iso(),
         }
         await self._cache.add_alert(alert)
         # Live push to the dashboard via the typed SSE event stream.
