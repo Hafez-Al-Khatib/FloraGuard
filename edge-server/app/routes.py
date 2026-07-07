@@ -5,9 +5,8 @@ import asyncio
 import json
 import structlog
 import time
-from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -34,7 +33,18 @@ from services import (
 
 logger = structlog.get_logger()
 router = APIRouter(prefix="/api/v1")
-limiter = Limiter(key_func=get_remote_address)
+def _client_ip(request: Request) -> str:
+    """Rate-limit key: the real client, not the nginx proxy.
+
+    Behind the reverse proxy every socket peer is the proxy container, which
+    would collapse all clients into one shared rate bucket. Trust the first
+    X-Forwarded-For hop when present, else the socket address.
+    """
+    fwd = request.headers.get("x-forwarded-for")
+    return fwd.split(",")[0].strip() if fwd else get_remote_address(request)
+
+
+limiter = Limiter(key_func=_client_ip)
 
 # ---------- dependencies ----------
 # Services are created once in the app lifespan (see main.py) and stored on
@@ -88,21 +98,24 @@ async def health() -> dict:
     "/node/{node_id}/upload-frame",
     response_model=CameraUploadResponse,
 )
+@limiter.limit("30/minute")
 async def receive_camera_frame(
     node_id: str,
     request: Request,
-    content_type: Annotated[str | None, Header()] = None,
-    content_length: Annotated[str | None, Header()] = None,
     cache: Cache = Depends(get_cache),
     principal: Principal = Depends(require_auth),
 ) -> CameraUploadResponse:
-    principal.assert_node(node_id)
     """Accept a raw JPEG/PNG/WebP binary body from an ESP32 camera node.
 
     The ESP32 sends the frame bytes directly with Content-Type: image/jpeg —
     no multipart wrapper. Content-Length is required so the size guard fires
     before the body is read into memory.
     """
+    principal.assert_node(node_id)
+    # Headers read from the request (not Annotated[Header()] params): the
+    # slowapi wrapper can't resolve postponed Header annotations.
+    content_type = request.headers.get("content-type")
+    content_length = request.headers.get("content-length")
     settings = get_settings()
     NodeIdPath(node_id=node_id)
 
@@ -152,7 +165,9 @@ async def receive_camera_frame(
     # upload, so the frame is still buffered for a manual /analyze.
     try:
         inference = get_inference(request)
-        label, confidence = inference.predict(data)
+        # to_thread: ONNX inference is CPU-bound; running it inline froze the
+        # event loop (SSE, telemetry ingest, both engines) for every upload.
+        label, confidence = await asyncio.to_thread(inference.predict, data)
         await _record_detection(cache, node_id, label, confidence)
         await logger.ainfo(
             "camera_frame_analyzed", node_id=node_id, issue=label, confidence=confidence
@@ -214,7 +229,9 @@ async def _record_detection(
     response_model=CameraAnalysisResponse,
     dependencies=[Depends(require_auth)],
 )
+@limiter.limit("30/minute")
 async def evaluate_crop_health(
+    request: Request,
     node_id: str,
     cache: Cache = Depends(get_cache),
     inference: InferenceEngine = Depends(get_inference),
@@ -230,7 +247,7 @@ async def evaluate_crop_health(
 
     t0 = time.perf_counter()
     try:
-        label, confidence = inference.predict(img_bytes)
+        label, confidence = await asyncio.to_thread(inference.predict, img_bytes)
     except Exception as exc:
         await logger.aerror("inference_failed", node_id=node_id, error=str(exc))
         raise HTTPException(
