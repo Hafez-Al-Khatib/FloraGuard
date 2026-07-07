@@ -15,10 +15,49 @@ class ApiService {
 
   ApiService({required this.baseUrl, required this.token});
 
-  Map<String, String> get _headers => {
+  /// One place that builds auth headers — every request path uses it, so a
+  /// token-scheme change cannot miss a hand-rolled header site.
+  Map<String, String> _authHeaders({String? contentType}) => {
         'Authorization': 'Bearer $token',
-        'Content-Type': 'application/json',
+        if (contentType != null) 'Content-Type': contentType,
       };
+
+  /// Shared GET boilerplate: URL build, auth, timeout, status check, decode.
+  Future<Map<String, dynamic>> _getJson(
+    String path, {
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    final response = await http
+        .get(Uri.parse('$baseUrl/api/v1$path'), headers: _authHeaders())
+        .timeout(timeout);
+    if (response.statusCode != 200) {
+      throw Exception('GET $path failed: ${response.statusCode}');
+    }
+    return jsonDecode(response.body) as Map<String, dynamic>;
+  }
+
+  /// Shared POST/PUT boilerplate for JSON bodies.
+  Future<Map<String, dynamic>> _sendJson(
+    String method,
+    String path, {
+    Map<String, dynamic>? body,
+    Duration timeout = const Duration(seconds: 8),
+  }) async {
+    final uri = Uri.parse('$baseUrl/api/v1$path');
+    final headers = _authHeaders(contentType: 'application/json');
+    final encoded = body != null ? jsonEncode(body) : null;
+    final response = await (method == 'PUT'
+            ? http.put(uri, headers: headers, body: encoded)
+            : http.post(uri, headers: headers, body: encoded))
+        .timeout(timeout);
+    if (response.statusCode != 200 && response.statusCode != 201) {
+      throw Exception(
+          '$method $path failed: ${response.statusCode} ${response.body}');
+    }
+    return response.body.isEmpty
+        ? <String, dynamic>{}
+        : jsonDecode(response.body) as Map<String, dynamic>;
+  }
 
   Future<bool> healthCheck() async {
     try {
@@ -44,7 +83,7 @@ class ApiService {
     // would 403 on the dashboard.
     try {
       final response = await http
-          .get(Uri.parse('$baseUrl/api/v1/nodes'), headers: _headers)
+          .get(Uri.parse('$baseUrl/api/v1/nodes'), headers: _authHeaders())
           .timeout(const Duration(seconds: 8));
       if (response.statusCode == 200) return AuthResult.ok;
       if (response.statusCode == 401 || response.statusCode == 403) {
@@ -56,63 +95,31 @@ class ApiService {
     }
   }
 
-  /// List node ids that currently have cached telemetry.
+  /// List node ids known to the hub (paired + telemetry-bearing).
   Future<List<String>> fetchNodes() async {
-    final response = await http
-        .get(Uri.parse('$baseUrl/api/v1/nodes'), headers: _headers)
-        .timeout(const Duration(seconds: 8));
-    if (response.statusCode != 200) {
-      throw Exception('Node list failed: ${response.statusCode}');
-    }
-    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final body = await _getJson('/nodes');
     return (body['nodes'] as List<dynamic>).cast<String>();
   }
 
   /// Latest cached telemetry for a single node.
   Future<TelemetrySnapshot> fetchTelemetry(String nodeId) async {
-    final response = await http
-        .get(
-          Uri.parse('$baseUrl/api/v1/node/$nodeId/telemetry'),
-          headers: _headers,
-        )
-        .timeout(const Duration(seconds: 8));
-    if (response.statusCode != 200) {
-      throw Exception('Telemetry failed: ${response.statusCode}');
-    }
-    final body = jsonDecode(response.body) as Map<String, dynamic>;
-    return TelemetrySnapshot.fromJson(body);
+    return TelemetrySnapshot.fromJson(await _getJson('/node/$nodeId/telemetry'));
   }
 
-  /// Fetch every paired node's latest telemetry for the dashboard grid.
-  ///
-  /// Nodes registered with the hub but missing telemetry (just-flashed devices,
-  /// nodes asleep between cycles) come back as placeholder snapshots so the
-  /// card stays pinned to the grid. Only an explicit operator action should
-  /// remove a paired card.
+  /// Every paired node's latest telemetry in ONE request (bulk endpoint) —
+  /// the previous implementation was one HTTP call per node.
   Future<List<TelemetrySnapshot>> fetchLatestTelemetry() async {
-    final nodes = await fetchNodes();
-    if (nodes.isEmpty) return [];
-    final results = await Future.wait(
-      nodes.map((n) => fetchTelemetry(n).catchError(
-        (_) => TelemetrySnapshot.placeholder(n),
-      )),
-      eagerError: false,
-    );
-    return results;
+    final body = await _getJson('/nodes/telemetry');
+    return (body['nodes'] as List<dynamic>)
+        .map((n) => TelemetrySnapshot.fromJson(n as Map<String, dynamic>))
+        .toList();
   }
 
   /// Latest cached disease diagnosis for a camera node, including treatments.
   /// Returns the decoded body, or null on any error (node has no detection yet).
   Future<Map<String, dynamic>?> fetchDiagnostics(String nodeId) async {
     try {
-      final response = await http
-          .get(
-            Uri.parse('$baseUrl/api/v1/node/$nodeId/diagnostics'),
-            headers: _headers,
-          )
-          .timeout(const Duration(seconds: 8));
-      if (response.statusCode != 200) return null;
-      return jsonDecode(response.body) as Map<String, dynamic>;
+      return await _getJson('/node/$nodeId/diagnostics');
     } catch (_) {
       return null;
     }
@@ -126,7 +133,7 @@ class ApiService {
       final response = await http
           .get(
             Uri.parse('$baseUrl/api/v1/node/$nodeId/frame'),
-            headers: {'Authorization': 'Bearer $token'},
+            headers: _authHeaders(),
           )
           .timeout(const Duration(seconds: 10));
       if (response.statusCode != 200) return null;
@@ -142,10 +149,7 @@ class ApiService {
     final response = await http
         .post(
           Uri.parse('$baseUrl/api/v1/node/$nodeId/upload-frame'),
-          headers: {
-            'Authorization': 'Bearer $token',
-            'Content-Type': 'image/jpeg',
-          },
+          headers: _authHeaders(contentType: 'image/jpeg'),
           body: jpegBytes,
         )
         .timeout(const Duration(seconds: 20));
@@ -155,20 +159,6 @@ class ApiService {
     return true;
   }
 
-  Future<DiagnosticSnapshot> analyzeCamera(String nodeId) async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/api/v1/node/$nodeId/analyze'),
-      headers: _headers,
-    );
-    if (response.statusCode != 200) {
-      throw Exception('Analyze failed: ${response.statusCode} ${response.body}');
-    }
-    final body = jsonDecode(response.body) as Map<String, dynamic>;
-    return DiagnosticSnapshot.fromJson(
-      body['anomalies'] as Map<String, dynamic>,
-    );
-  }
-
   /// Downsampled history for one field of a node from InfluxDB.
   /// `field` in {moisture, temperature, ec, battery_pct}; `range` in {1h,24h,7d}.
   Future<List<({DateTime t, double v})>> fetchHistory(
@@ -176,17 +166,10 @@ class ApiService {
     String field,
     String range,
   ) async {
-    final response = await http
-        .get(
-          Uri.parse(
-              '$baseUrl/api/v1/node/$nodeId/history?field=$field&range=$range'),
-          headers: _headers,
-        )
-        .timeout(const Duration(seconds: 12));
-    if (response.statusCode != 200) {
-      throw Exception('History failed: ${response.statusCode}');
-    }
-    final body = jsonDecode(response.body) as Map<String, dynamic>;
+    final body = await _getJson(
+      '/node/$nodeId/history?field=$field&range=$range',
+      timeout: const Duration(seconds: 12),
+    );
     final pts = (body['points'] as List<dynamic>);
     return pts.map((p) {
       final m = p as Map<String, dynamic>;
@@ -198,51 +181,21 @@ class ApiService {
   }
 
   /// Manual actuator override (admin token). action = "on" | "off".
-  Future<Map<String, dynamic>> sendZoneCommand(String zone, String action) async {
-    final response = await http
-        .post(
-          Uri.parse('$baseUrl/api/v1/zone/$zone/command'),
-          headers: _headers,
-          body: jsonEncode({'action': action}),
-        )
-        .timeout(const Duration(seconds: 8));
-    if (response.statusCode != 200) {
-      throw Exception('Command failed: ${response.statusCode} ${response.body}');
-    }
-    return jsonDecode(response.body) as Map<String, dynamic>;
+  Future<Map<String, dynamic>> sendZoneCommand(String zone, String action) {
+    return _sendJson('POST', '/zone/$zone/command', body: {'action': action});
   }
 
-  Future<Map<String, dynamic>> fetchAutomationConfig() async {
-    final response = await http
-        .get(Uri.parse('$baseUrl/api/v1/automation/config'), headers: _headers)
-        .timeout(const Duration(seconds: 8));
-    if (response.statusCode != 200) {
-      throw Exception('Config fetch failed: ${response.statusCode}');
-    }
-    return jsonDecode(response.body) as Map<String, dynamic>;
+  Future<Map<String, dynamic>> fetchAutomationConfig() {
+    return _getJson('/automation/config');
   }
 
   Future<void> updateAutomationConfig(Map<String, dynamic> updates) async {
-    final response = await http
-        .put(
-          Uri.parse('$baseUrl/api/v1/automation/config'),
-          headers: _headers,
-          body: jsonEncode(updates),
-        )
-        .timeout(const Duration(seconds: 8));
-    if (response.statusCode != 200) {
-      throw Exception('Config update failed: ${response.statusCode} ${response.body}');
-    }
+    await _sendJson('PUT', '/automation/config', body: updates);
   }
 
   Future<List<Map<String, dynamic>>> fetchAutomationLog({int count = 50}) async {
     try {
-      final response = await http
-          .get(Uri.parse('$baseUrl/api/v1/automation/log?count=$count'),
-              headers: _headers)
-          .timeout(const Duration(seconds: 8));
-      if (response.statusCode != 200) return [];
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final body = await _getJson('/automation/log?count=$count');
       return (body['log'] as List<dynamic>)
           .map((a) => (a as Map).cast<String, dynamic>())
           .toList();
@@ -254,11 +207,7 @@ class ApiService {
   /// Most recent alerts (offline / dry / battery / disease), newest first.
   Future<List<Map<String, dynamic>>> fetchAlerts({int count = 30}) async {
     try {
-      final response = await http
-          .get(Uri.parse('$baseUrl/api/v1/alerts?count=$count'), headers: _headers)
-          .timeout(const Duration(seconds: 8));
-      if (response.statusCode != 200) return [];
-      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final body = await _getJson('/alerts?count=$count');
       return (body['alerts'] as List<dynamic>)
           .map((a) => (a as Map).cast<String, dynamic>())
           .toList();
@@ -267,10 +216,10 @@ class ApiService {
     }
   }
 
-  /// Subscribe to the SSE live-telemetry feed.
+  /// Subscribe to the SSE live event feed.
   ///
-  /// Emits one decoded JSON event per published reading, of the shape:
-  /// `{"node_id": "...", "data": {"moisture": 58.4, ...}}`.
+  /// Emits one decoded JSON envelope per event, of the shape:
+  /// `{"node_id": "...", "data": {"type": "telemetry", "payload": {...}}}`.
   /// The caller is responsible for cancelling the subscription on dispose —
   /// `StreamSubscription.cancel()` closes the underlying HTTP connection.
   Stream<Map<String, dynamic>> streamTelemetry() async* {
@@ -278,7 +227,7 @@ class ApiService {
       'GET',
       Uri.parse('$baseUrl/api/v1/stream'),
     );
-    request.headers['Authorization'] = 'Bearer $token';
+    request.headers.addAll(_authHeaders());
     request.headers['Accept'] = 'text/event-stream';
 
     final response = await http.Client().send(request);
@@ -318,7 +267,7 @@ class ApiService {
         '$baseUrl/api/v1/agronomist/chat?node_id=$nodeId&user_query=${Uri.encodeComponent(query)}',
       ),
     );
-    request.headers['Authorization'] = 'Bearer $token';
+    request.headers.addAll(_authHeaders());
     request.headers['Accept'] = 'text/event-stream';
 
     final response = await http.Client().send(request);

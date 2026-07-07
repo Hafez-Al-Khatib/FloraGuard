@@ -33,10 +33,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _capturing = false;
   List<Map<String, dynamic>> _alerts = [];
 
-  final TextEditingController _chatController = TextEditingController();
-  final ScrollController _chatScroll = ScrollController();
-  final List<_ChatMessage> _chatHistory = [];
-  bool _chatLoading = false;
   List<String> _nodes = [];
   String? _selectedNode;
 
@@ -61,29 +57,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _alerts = alerts;
         // MERGE rather than clear: a paired node should remain on the grid
-        // even if its cache TTL expired between refreshes. We update fields
-        // for what came back, and keep prior entries untouched otherwise.
+        // even if its cache TTL expired between refreshes. merge() lives on
+        // the model next to the field list, so new fields (the actuator ones
+        // once vanished here) can't be silently dropped by a hand-rolled copy.
         for (final fresh in list) {
           final prior = _telemetry[fresh.nodeId];
-          // Preserve the updateTick so the "fresh delta" animation only fires
-          // on real SSE deltas, not on every page-refresh re-fetch.
-          _telemetry[fresh.nodeId] = TelemetrySnapshot(
-            nodeId: fresh.nodeId,
-            moisture: fresh.moisture ?? prior?.moisture,
-            temperature: fresh.temperature ?? prior?.temperature,
-            ec: fresh.ec ?? prior?.ec,
-            batteryPct: fresh.batteryPct ?? prior?.batteryPct,
-            timestamp: fresh.timestamp ?? prior?.timestamp,
-            resetReason: fresh.resetReason ?? prior?.resetReason,
-            freeHeap: fresh.freeHeap ?? prior?.freeHeap,
-            lastSeen: fresh.lastSeen ?? prior?.lastSeen,
-            profile: fresh.profile ?? prior?.profile,
-            detectionIssue: fresh.detectionIssue ?? prior?.detectionIssue,
-            detectionConfidence:
-                fresh.detectionConfidence ?? prior?.detectionConfidence,
-            detectionAt: fresh.detectionAt ?? prior?.detectionAt,
-            updateTick: prior?.updateTick ?? 0,
-          );
+          _telemetry[fresh.nodeId] = prior?.merge(fresh) ?? fresh;
         }
         _nodes = _telemetry.keys.toList()..sort();
         if (_selectedNode == null || !_nodes.contains(_selectedNode)) {
@@ -186,12 +165,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         final nodeId = event['node_id'] as String?;
         final data = event['data'] as Map<String, dynamic>?;
         if (nodeId == null || data == null) return;
-        // Alert events ride the same SSE feed but are not telemetry deltas.
-        if (data['alert'] is Map) {
-          final alert = (data['alert'] as Map).cast<String, dynamic>();
+        // Typed envelope: {"type": telemetry|alert|detection|actuator|online,
+        // "payload": {...}} — dispatch on type, never sniff payload keys.
+        final type = data['type'] as String? ?? '';
+        final payload =
+            (data['payload'] as Map?)?.cast<String, dynamic>() ?? const {};
+        if (type == 'alert') {
           setState(() {
             _liveConnected = true;
-            _alerts.insert(0, alert);
+            _alerts.insert(0, payload);
             if (_alerts.length > 50) _alerts.removeRange(50, _alerts.length);
           });
           return;
@@ -200,7 +182,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _liveConnected = true;
           final existing = _telemetry[nodeId] ??
               TelemetrySnapshot(nodeId: nodeId);
-          _telemetry[nodeId] = existing.mergeDelta(data);
+          _telemetry[nodeId] = existing.applyEvent(type, payload);
           if (!_nodes.contains(nodeId)) _nodes = [..._nodes, nodeId];
         });
       },
@@ -212,48 +194,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       },
       cancelOnError: true,
     );
-  }
-
-  Future<void> _sendChat() async {
-    final query = _chatController.text.trim();
-    if (query.isEmpty || _chatLoading) return;
-    final targetNode = _selectedNode ?? 'node-01';
-
-    setState(() {
-      _chatHistory.add(_ChatMessage(role: _Role.user, text: query));
-      _chatLoading = true;
-    });
-    _chatController.clear();
-    _scrollChatToEnd();
-
-    final api = context.read<AppState>().api;
-    if (api == null) return;
-
-    final buffer = StringBuffer();
-    final msg = _ChatMessage(role: _Role.assistant, text: '');
-    setState(() => _chatHistory.add(msg));
-
-    try {
-      await for (final chunk in api.streamAgronomistChat(targetNode, query)) {
-        buffer.write(chunk);
-        if (mounted) {
-          setState(() => msg.text = buffer.toString());
-          _scrollChatToEnd();
-        }
-      }
-    } catch (e) {
-      if (mounted) setState(() => msg.text = '${buffer.toString()}\n[LINK ERROR: $e]');
-    }
-
-    if (mounted) setState(() => _chatLoading = false);
-  }
-
-  void _scrollChatToEnd() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_chatScroll.hasClients) {
-        _chatScroll.jumpTo(_chatScroll.position.maxScrollExtent);
-      }
-    });
   }
 
   void _openAutomation() {
@@ -308,14 +248,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         onTap: _openNodeDetail,
                       );
                       final chat = _ChatPanel(
-                        controller: _chatController,
-                        scroll: _chatScroll,
-                        history: _chatHistory,
-                        loading: _chatLoading,
                         nodes: _nodes,
                         selectedNode: _selectedNode,
                         onNodeChanged: (n) => setState(() => _selectedNode = n),
-                        onSend: _sendChat,
                       );
                       if (wide) {
                         return Row(
@@ -348,8 +283,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void dispose() {
     _liveSub?.cancel();
-    _chatController.dispose();
-    _chatScroll.dispose();
     super.dispose();
   }
 }
@@ -672,26 +605,80 @@ class _ChatMessage {
   _ChatMessage({required this.role, required this.text});
 }
 
-class _ChatPanel extends StatelessWidget {
-  final TextEditingController controller;
-  final ScrollController scroll;
-  final List<_ChatMessage> history;
-  final bool loading;
+/// Owns its transcript + streaming state, so per-token setState calls during
+/// a streamed reply rebuild ONLY this panel — a 200-token answer used to force
+/// 200 full card-grid rebuilds (with sort) via the parent screen's setState.
+class _ChatPanel extends StatefulWidget {
   final List<String> nodes;
   final String? selectedNode;
   final ValueChanged<String?> onNodeChanged;
-  final VoidCallback onSend;
 
   const _ChatPanel({
-    required this.controller,
-    required this.scroll,
-    required this.history,
-    required this.loading,
     required this.nodes,
     required this.selectedNode,
     required this.onNodeChanged,
-    required this.onSend,
   });
+
+  @override
+  State<_ChatPanel> createState() => _ChatPanelState();
+}
+
+class _ChatPanelState extends State<_ChatPanel> {
+  final TextEditingController _controller = TextEditingController();
+  final ScrollController _scroll = ScrollController();
+  final List<_ChatMessage> _history = [];
+  bool _loading = false;
+
+  Future<void> _send() async {
+    final query = _controller.text.trim();
+    if (query.isEmpty || _loading) return;
+    final targetNode = widget.selectedNode ?? 'node-01';
+
+    setState(() {
+      _history.add(_ChatMessage(role: _Role.user, text: query));
+      _loading = true;
+    });
+    _controller.clear();
+    _scrollToEnd();
+
+    final api = context.read<AppState>().api;
+    if (api == null) return;
+
+    final buffer = StringBuffer();
+    final msg = _ChatMessage(role: _Role.assistant, text: '');
+    setState(() => _history.add(msg));
+
+    try {
+      await for (final chunk in api.streamAgronomistChat(targetNode, query)) {
+        buffer.write(chunk);
+        if (mounted) {
+          setState(() => msg.text = buffer.toString());
+          _scrollToEnd();
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => msg.text = '${buffer.toString()}\n[LINK ERROR: $e]');
+      }
+    }
+
+    if (mounted) setState(() => _loading = false);
+  }
+
+  void _scrollToEnd() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scroll.hasClients) {
+        _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -703,18 +690,18 @@ class _ChatPanel extends StatelessWidget {
           Row(
             children: [
               const Expanded(child: SectionLabel('AI Agronomist // Advisory')),
-              if (loading) const LiveIndicator(color: AppColors.warning),
+              if (_loading) const LiveIndicator(color: AppColors.warning),
             ],
           ),
           const SizedBox(height: AppSpace.sm),
           _NodeSelector(
-            nodes: nodes,
-            selected: selectedNode,
-            onChanged: onNodeChanged,
+            nodes: widget.nodes,
+            selected: widget.selectedNode,
+            onChanged: widget.onNodeChanged,
           ),
           const TechnicalDivider(vertical: AppSpace.sm),
           Expanded(
-            child: history.isEmpty
+            child: _history.isEmpty
                 ? Center(
                     child: Text(
                       'AWAITING QUERY',
@@ -722,15 +709,15 @@ class _ChatPanel extends StatelessWidget {
                     ),
                   )
                 : ListView.separated(
-                    controller: scroll,
-                    itemCount: history.length,
+                    controller: _scroll,
+                    itemCount: _history.length,
                     separatorBuilder: (_, __) =>
                         const SizedBox(height: AppSpace.sm),
-                    itemBuilder: (_, i) => _ChatBubble(message: history[i]),
+                    itemBuilder: (_, i) => _ChatBubble(message: _history[i]),
                   ),
           ),
           const SizedBox(height: AppSpace.sm),
-          _ChatInput(controller: controller, onSend: onSend),
+          _ChatInput(controller: _controller, onSend: _send),
         ],
       ),
     );

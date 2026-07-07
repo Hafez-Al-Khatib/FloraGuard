@@ -156,41 +156,120 @@ class TelemetrySnapshot {
     return resetReason == 'deepsleep' || resetReason == 'poweron';
   }
 
-  /// Merge a delta payload from the SSE stream into this snapshot. The stream
-  /// only carries the fields that changed in the latest publish. Bumps the
-  /// `updateTick` so animated widgets can detect "a fresh value arrived" even
-  /// when the numeric value happens to be identical to the previous reading.
-  TelemetrySnapshot mergeDelta(Map<String, dynamic> delta) {
-    // SSE detection events carry a nested {"detection": {issue, confidence, at}};
-    // actuator events carry {"actuator": {on, reason, bound, since}}.
-    final det = delta['detection'];
-    final hasDet = det is Map;
-    final act = delta['actuator'];
-    final hasAct = act is Map;
-    return TelemetrySnapshot(
-      nodeId: nodeId,
-      moisture: (delta['moisture'] as num?)?.toDouble() ?? moisture,
-      temperature: (delta['temperature'] as num?)?.toDouble() ?? temperature,
-      ec: (delta['ec'] as num?)?.toDouble() ?? ec,
-      batteryPct: (delta['battery_pct'] as num?)?.toDouble() ?? batteryPct,
-      timestamp: DateTime.now(),
-      resetReason: resetReason,
-      freeHeap: freeHeap,
-      lastSeen: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      profile: profile,
-      detectionIssue: hasDet ? det['issue'] as String? : detectionIssue,
-      detectionConfidence: hasDet
-          ? (det['confidence'] as num?)?.toDouble()
-          : detectionConfidence,
-      detectionAt: hasDet && det['at'] != null
-          ? DateTime.tryParse(det['at'] as String)
-          : detectionAt,
-      actuatorOn: hasAct ? act['on'] as bool? ?? actuatorOn : actuatorOn,
-      actuatorReason: hasAct ? act['reason'] as String? : actuatorReason,
-      actuatorBound: hasAct ? act['bound'] as String? ?? actuatorBound : actuatorBound,
-      actuatorMode: hasAct ? act['mode'] as String? ?? actuatorMode : actuatorMode,
-      updateTick: updateTick + 1,
-    );
+  /// Field-by-field copy. THE single place that knows the full field list —
+  /// refresh merges and SSE events both build on it, so a new field added to
+  /// the constructor cannot silently vanish in a hand-rolled copy elsewhere.
+  TelemetrySnapshot copyWith({
+    double? moisture,
+    double? temperature,
+    double? ec,
+    double? batteryPct,
+    DateTime? timestamp,
+    String? resetReason,
+    int? freeHeap,
+    int? lastSeen,
+    Map<String, String>? profile,
+    String? detectionIssue,
+    double? detectionConfidence,
+    DateTime? detectionAt,
+    bool? actuatorOn,
+    String? actuatorReason,
+    String? actuatorBound,
+    String? actuatorMode,
+    int? updateTick,
+  }) =>
+      TelemetrySnapshot(
+        nodeId: nodeId,
+        moisture: moisture ?? this.moisture,
+        temperature: temperature ?? this.temperature,
+        ec: ec ?? this.ec,
+        batteryPct: batteryPct ?? this.batteryPct,
+        timestamp: timestamp ?? this.timestamp,
+        resetReason: resetReason ?? this.resetReason,
+        freeHeap: freeHeap ?? this.freeHeap,
+        lastSeen: lastSeen ?? this.lastSeen,
+        profile: profile ?? this.profile,
+        detectionIssue: detectionIssue ?? this.detectionIssue,
+        detectionConfidence: detectionConfidence ?? this.detectionConfidence,
+        detectionAt: detectionAt ?? this.detectionAt,
+        actuatorOn: actuatorOn ?? this.actuatorOn,
+        actuatorReason: actuatorReason ?? this.actuatorReason,
+        actuatorBound: actuatorBound ?? this.actuatorBound,
+        actuatorMode: actuatorMode ?? this.actuatorMode,
+        updateTick: updateTick ?? this.updateTick,
+      );
+
+  /// Merge a freshly fetched snapshot over this one (pull-to-refresh path).
+  /// Fresh non-null values win; prior values survive gaps in the response.
+  /// `updateTick` is preserved so the "fresh delta" animation only fires on
+  /// real SSE deltas, not on every page-refresh re-fetch.
+  TelemetrySnapshot merge(TelemetrySnapshot fresh) => copyWith(
+        moisture: fresh.moisture,
+        temperature: fresh.temperature,
+        ec: fresh.ec,
+        batteryPct: fresh.batteryPct,
+        timestamp: fresh.timestamp,
+        resetReason: fresh.resetReason,
+        freeHeap: fresh.freeHeap,
+        lastSeen: fresh.lastSeen,
+        profile: fresh.profile,
+        detectionIssue: fresh.detectionIssue,
+        detectionConfidence: fresh.detectionConfidence,
+        detectionAt: fresh.detectionAt,
+        actuatorOn: fresh.actuatorOn,
+        actuatorReason: fresh.actuatorReason,
+        actuatorBound: fresh.actuatorBound,
+        actuatorMode: fresh.actuatorMode,
+      );
+
+  /// Apply one typed SSE event (`data.type` from the server envelope).
+  ///
+  /// Only `telemetry` events refresh liveness — a server-generated actuator
+  /// or detection event proves nothing about the device being alive, and
+  /// stamping lastSeen for them masked real outages.
+  TelemetrySnapshot applyEvent(String type, Map<String, dynamic> payload) {
+    switch (type) {
+      case 'telemetry':
+        return copyWith(
+          moisture: (payload['moisture'] as num?)?.toDouble(),
+          temperature: (payload['temperature'] as num?)?.toDouble(),
+          ec: (payload['ec'] as num?)?.toDouble(),
+          batteryPct: (payload['battery_pct'] as num?)?.toDouble(),
+          timestamp: DateTime.now(),
+          lastSeen: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          updateTick: updateTick + 1,
+        );
+      case 'detection':
+        return copyWith(
+          detectionIssue: payload['issue'] as String?,
+          detectionConfidence: (payload['confidence'] as num?)?.toDouble(),
+          detectionAt: payload['at'] != null
+              ? DateTime.tryParse(payload['at'] as String)
+              : null,
+          updateTick: updateTick + 1,
+        );
+      case 'actuator':
+        return copyWith(
+          actuatorOn: payload['on'] as bool?,
+          actuatorReason: payload['reason'] as String?,
+          actuatorBound: payload['bound'] as String?,
+          actuatorMode: payload['mode'] as String?,
+          updateTick: updateTick + 1,
+        );
+      case 'online':
+        final rawProfile = payload['profile'];
+        return copyWith(
+          profile: rawProfile is Map
+              ? rawProfile.map(
+                  (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
+                )
+              : null,
+          // A hello IS device contact — it authenticated to the hub just now.
+          lastSeen: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        );
+      default:
+        return this; // unknown event types don't mutate the snapshot
+    }
   }
 
   Map<String, dynamic> toJson() => {
@@ -203,18 +282,4 @@ class TelemetrySnapshot {
         'reset_reason': resetReason,
         'free_heap': freeHeap,
       };
-}
-
-class DiagnosticSnapshot {
-  final String issue;
-  final double confidence;
-
-  DiagnosticSnapshot({required this.issue, required this.confidence});
-
-  factory DiagnosticSnapshot.fromJson(Map<String, dynamic> json) {
-    return DiagnosticSnapshot(
-      issue: json['issue'] as String,
-      confidence: (json['confidence'] as num).toDouble(),
-    );
-  }
 }

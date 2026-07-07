@@ -54,8 +54,14 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
         if (!mounted) return;
         if (event['node_id'] != widget.nodeId) return;
         final data = event['data'] as Map<String, dynamic>?;
-        if (data == null || data['alert'] is Map) return;
-        setState(() => _snapshot = _snapshot.mergeDelta(data));
+        if (data == null) return;
+        // Typed envelope — alerts are handled by the dashboard's alert bar,
+        // everything else merges via the model's single dispatcher.
+        final type = data['type'] as String? ?? '';
+        if (type == 'alert') return;
+        final payload =
+            (data['payload'] as Map?)?.cast<String, dynamic>() ?? const {};
+        setState(() => _snapshot = _snapshot.applyEvent(type, payload));
       },
       cancelOnError: false,
     );
@@ -68,13 +74,11 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
       final res = await api.sendZoneCommand(widget.nodeId, action);
       if (!mounted) return;
       // Optimistic local update; the SSE actuator event confirms shortly after.
-      setState(() => _snapshot = _snapshot.mergeDelta({
-            'actuator': {
-              'on': res['on'],
-              'reason': res['reason'] ?? res['blocked'],
-              'bound': _snapshot.actuatorBound ?? 'virtual',
-              'mode': _snapshot.actuatorMode,
-            }
+      setState(() => _snapshot = _snapshot.applyEvent('actuator', {
+            'on': res['on'],
+            'reason': res['reason'] ?? res['blocked'],
+            'bound': _snapshot.actuatorBound ?? 'virtual',
+            'mode': _snapshot.actuatorMode,
           }));
       _toast(res['blocked'] != null
           ? 'Blocked: ${res['blocked']}'
