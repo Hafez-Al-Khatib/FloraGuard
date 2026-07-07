@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from auth import require_admin, require_auth
+from auth import Principal, require_admin, require_auth
 from config import get_settings
 from schemas import (
     CameraAnalysisResponse,
@@ -87,7 +87,6 @@ async def health() -> dict:
 @router.post(
     "/node/{node_id}/upload-frame",
     response_model=CameraUploadResponse,
-    dependencies=[Depends(require_auth)],
 )
 async def receive_camera_frame(
     node_id: str,
@@ -95,7 +94,9 @@ async def receive_camera_frame(
     content_type: Annotated[str | None, Header()] = None,
     content_length: Annotated[str | None, Header()] = None,
     cache: Cache = Depends(get_cache),
+    principal: Principal = Depends(require_auth),
 ) -> CameraUploadResponse:
+    principal.assert_node(node_id)
     """Accept a raw JPEG/PNG/WebP binary body from an ESP32 camera node.
 
     The ESP32 sends the frame bytes directly with Content-Type: image/jpeg —
@@ -309,9 +310,12 @@ async def latest_diagnostics(
 
 # ---------- agronomist chat ----------
 
+# Admin-only: chat spends metered cloud-API money; field devices have no
+# reason to call it, and the per-IP rate limit alone can't stop a leaked
+# device token from burning the quota.
 @router.get(
     "/agronomist/chat",
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_admin)],
 )
 @limiter.limit("5/minute")
 async def stream_agronomist_chat(
@@ -349,13 +353,13 @@ async def stream_agronomist_chat(
 
 @router.post(
     "/node/{node_id}/hello",
-    dependencies=[Depends(require_auth)],
     status_code=status.HTTP_201_CREATED,
 )
 async def register_node(
     node_id: str,
     request: Request,
     cache: Cache = Depends(get_cache),
+    principal: Principal = Depends(require_auth),
 ) -> dict:
     """Pair a node with the system.
 
@@ -365,6 +369,7 @@ async def register_node(
     (e.g. ``"soil"``, ``"camera"``) plus a free-form ``label`` for the operator.
     """
     NodeIdPath(node_id=node_id)
+    principal.assert_node(node_id)
     try:
         body = await request.json()
     except Exception:
@@ -375,10 +380,14 @@ async def register_node(
         "fw": str(body.get("firmware_version") or "")[:32],
     }
     await cache.register_node(node_id, profile=profile)
-    # Issue (or rotate) this device's own bearer token. The caller authenticated
-    # with the admin token (provisioning bootstrap) or its prior device token;
-    # it stores the returned token and uses it for subsequent requests.
-    device_token = await cache.issue_device_token(node_id)
+    if principal.is_admin:
+        # Provisioning bootstrap: issue (or rotate) the node's own token.
+        device_token = await cache.issue_device_token(node_id)
+    else:
+        # A device re-hello (cold boot) keeps its current token — rotating here
+        # would brick the caller, which cannot store the response atomically
+        # with the request (ESP32s discard the body on power blips).
+        device_token = await cache.get_device_token(node_id)
     # Push to SSE so the dashboard places the card on screen immediately.
     await cache.publish_telemetry_stream({
         "node_id": node_id,
@@ -696,13 +705,16 @@ async def telemetry_stream(cache: Cache = Depends(get_cache)) -> StreamingRespon
 @router.post(
     "/telemetry",
     status_code=status.HTTP_202_ACCEPTED,
-    dependencies=[Depends(require_auth)],
 )
 async def ingest_telemetry(
     payload: TelemetryPayload,
     cache: Cache = Depends(get_cache),
     tsdb: TimeSeriesDB = Depends(get_tsdb),
+    principal: Principal = Depends(require_auth),
 ):
+    # A device token may only report as its own node — no spoofing a
+    # neighbouring zone into auto-irrigation.
+    principal.assert_node(payload.node_id)
     # Auto-pair: any HTTP telemetry source counts as a registered device.
     # Keeps the card on the dashboard even after the cache TTL expires.
     await cache.register_node(payload.node_id)

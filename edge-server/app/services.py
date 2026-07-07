@@ -142,6 +142,10 @@ class Cache:
             return None
         return await self._text_redis().hget("auth:devicetokens", token)
 
+    async def get_device_token(self, node_id: str) -> str | None:
+        """Current token for a node (reverse index), or None if never issued."""
+        return await self._text_redis().get(f"auth:devicetoken:{node_id}")
+
     async def revoke_device_token(self, node_id: str) -> bool:
         r = self._text_redis()
         old = await r.get(f"auth:devicetoken:{node_id}")

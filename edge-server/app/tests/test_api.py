@@ -199,6 +199,65 @@ async def test_admin_route_rejects_device_token(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_device_token_cannot_post_telemetry_for_other_node(client: AsyncClient):
+    """A device principal is scoped to its own node_id — no spoofing."""
+    mock_cache = AsyncMock()
+    mock_cache.verify_device_token = AsyncMock(return_value="soil-zone-a")
+    app.dependency_overrides[get_cache] = lambda: mock_cache
+    app.state.cache = mock_cache
+
+    response = await client.post(
+        "/api/v1/telemetry",
+        json={"node_id": "soil-zone-b", "moisture": 5.0},
+        headers={"Authorization": "Bearer some-device-token"},
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_device_token_cannot_hello_other_node(client: AsyncClient):
+    """One leaked node token must not be able to rotate another node's token."""
+    mock_cache = AsyncMock()
+    mock_cache.verify_device_token = AsyncMock(return_value="soil-zone-a")
+    app.dependency_overrides[get_cache] = lambda: mock_cache
+    app.state.cache = mock_cache
+
+    response = await client.post(
+        "/api/v1/node/soil-zone-b/hello",
+        headers={"Authorization": "Bearer some-device-token"},
+    )
+    assert response.status_code == 403
+    mock_cache.issue_device_token.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_hello_with_own_device_token_does_not_rotate(client: AsyncClient):
+    """A device re-hello (cold boot) keeps its current token; rotation would
+    brick a caller that cannot store the response atomically."""
+    mock_cache = AsyncMock()
+    mock_cache.verify_device_token = AsyncMock(return_value="cam-a")
+    mock_cache.get_device_token = AsyncMock(return_value="existing-token")
+    app.dependency_overrides[get_cache] = lambda: mock_cache
+    app.state.cache = mock_cache
+
+    response = await client.post(
+        "/api/v1/node/cam-a/hello",
+        headers={"Authorization": "Bearer existing-token"},
+    )
+    assert response.status_code == 201
+    assert response.json()["device_token"] == "existing-token"
+    mock_cache.issue_device_token.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_empty_bearer_rejected(client: AsyncClient):
+    response = await client.get(
+        "/api/v1/nodes", headers={"Authorization": "Bearer "}
+    )
+    assert response.status_code in (401, 403)
+
+
+@pytest.mark.anyio
 async def test_revoke_device_token_endpoint(client: AsyncClient):
     mock_cache = AsyncMock()
     mock_cache.revoke_device_token = AsyncMock(return_value=True)
