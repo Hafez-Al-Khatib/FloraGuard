@@ -1,0 +1,3 @@
+user default on >ChangeMeRedisStrongPassword123! ~* &* +@all
+user pms_bridge on >BridgePassChangeMe! ~telemetry:* ~farm:* &* +@read +@write -@dangerous
+user pms_api on >ApiPassChangeMe! ~* &* +@read +@write -@dangerous

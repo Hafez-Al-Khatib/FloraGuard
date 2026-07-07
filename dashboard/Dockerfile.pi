@@ -1,0 +1,17 @@
+# Raspberry Pi 5 dashboard image.
+#
+# Serves the pre-built Flutter web bundle from dashboard/build/web/ with nginx.
+# This avoids the AMD64-only Cirrus Labs Flutter builder image on ARM64.
+#
+# Build the web bundle first on a machine with Flutter installed:
+#   cd dashboard
+#   flutter build web --no-tree-shake-icons --release --pwa-strategy=none
+#
+# The resulting build/web/ directory is committed so the Pi can deploy directly.
+
+FROM nginx:alpine
+
+COPY build/web /usr/share/nginx/html
+COPY docker.nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80

@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard-web",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8080",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "C:/Users/Hafez/Desktop/Rami Senior Project/dashboard/build/web"
+      ],
+      "port": 8080
+    }
+  ]
+}

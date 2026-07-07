@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same branch — keeps the queue moving
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: edge-server/app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: edge-server/app/requirements.txt
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Run pytest
+        run: pytest tests/ -v --tb=short
+
+  flutter:
+    name: Dashboard (analyze + test + web build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Static analysis
+        run: flutter analyze
+
+      - name: Unit + widget tests
+        run: flutter test
+
+      - name: Web build (ensures release output compiles)
+        run: flutter build web --no-tree-shake-icons --release
+
+  docker:
+    name: Docker images build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build images without pushing — proves the Dockerfiles are coherent
+      # without needing a registry.
+      - name: Build API image
+        uses: docker/build-push-action@v6
+        with:
+          context: edge-server/app
+          push: false
+          tags: pms-api:ci
+
+      - name: Build dashboard image
+        uses: docker/build-push-action@v6
+        with:
+          context: dashboard
+          push: false
+          tags: pms-dashboard:ci

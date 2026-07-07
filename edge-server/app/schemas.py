@@ -1,0 +1,81 @@
+"""Pydantic request/response models."""
+import re
+from datetime import datetime
+
+from pydantic import BaseModel, Field, field_validator
+
+NODE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+class NodeIdPath(BaseModel):
+    node_id: str = Field(..., min_length=1, max_length=64)
+
+    @field_validator("node_id")
+    @classmethod
+    def _validate_node_id(cls, value: str) -> str:
+        if not NODE_ID_PATTERN.match(value):
+            raise ValueError(
+                "node_id must contain only alphanumeric characters, hyphens, and underscores"
+            )
+        return value
+
+
+class DiagnosticResult(BaseModel):
+    issue: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+
+
+class CameraUploadResponse(BaseModel):
+    status: str
+    buffered: bool
+    size_bytes: int
+
+
+class TreatmentOption(BaseModel):
+    type: str = Field(..., description="Treatment category: cultural, chemical, biological, or none")
+    actions: list[str] = Field(..., description="List of actionable steps")
+
+
+class CameraAnalysisResponse(BaseModel):
+    node_id: str
+    anomalies: DiagnosticResult | None
+    inference_ms: float
+    treatments: list[TreatmentOption] | None = None
+
+
+class ChatQuery(BaseModel):
+    node_id: str = Field(..., min_length=1, max_length=64)
+    user_query: str = Field(..., min_length=1, max_length=2048)
+
+    @field_validator("node_id")
+    @classmethod
+    def _validate_node_id(cls, value: str) -> str:
+        if not NODE_ID_PATTERN.match(value):
+            raise ValueError(
+                "node_id must contain only alphanumeric characters, hyphens, and underscores"
+            )
+        return value
+
+    @field_validator("user_query")
+    @classmethod
+    def _sanitize_query(cls, value: str) -> str:
+        # Strip control characters that break prompts or logs
+        return "".join(ch for ch in value if ord(ch) >= 32 or ch in {"\n", "\t"})
+
+
+class TelemetryPayload(BaseModel):
+    node_id: str
+    moisture: float | None = Field(None, ge=0.0, le=100.0)
+    temperature: float | None = Field(None, ge=-50.0, le=80.0)
+    ec: float | None = Field(None, ge=0.0)
+    battery_pct: float | None = Field(None, ge=0.0, le=100.0)
+    timestamp: datetime | None = None
+
+    @field_validator("node_id")
+    @classmethod
+    def _validate_node_id(cls, value: str) -> str:
+        if not NODE_ID_PATTERN.match(value):
+            raise ValueError(
+                "node_id must contain only alphanumeric characters, hyphens, and underscores"
+            )
+        return value

@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# FastAPI / Edge Server
+.env
+edge-server/.env
+edge-server/app/.env
+edge-server/app/*.onnx
+edge-server/app/models/*.pt
+edge-server/app/models/*.pth
+*.db
+*.sqlite3
+
+# Docker volumes
+data/
+*.vol/
+edge-server/influxdb/data/
+edge-server/redis/data/
+edge-server/mosquitto/data/
+edge-server/mosquitto/log/
+
+# TLS certificates (user must generate or mount securely)
+edge-server/mosquitto/certs/*.crt
+edge-server/mosquitto/certs/*.key
+edge-server/mosquitto/certs/*.csr
+edge-server/mosquitto/certs/*.srl
+edge-server/nginx/certs/*.crt
+edge-server/nginx/certs/*.key
+
+# Flutter / Dart
+dashboard/.dart_tool/
+dashboard/.packages
+dashboard/build/
+dashboard/.flutter-plugins
+dashboard/.flutter-plugins-dependencies
+dashboard/.metadata
+dashboard/pubspec.lock
+
+# PlatformIO / Arduino
+firmware/**/src/secrets.h
+firmware/**/.pio/
+firmware/**/.vscode/.browse.c_cpp.db*
+firmware/**/.vscode/c_cpp_properties.json
+firmware/**/.vscode/launch.json
+firmware/**/.vscode/ipch
+firmware/**/build/
+firmware/**/*.bin
+firmware/**/*.elf
+
+# Claude Code machine-local settings
+.claude/settings.local.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs generated outputs
+docs/_build/

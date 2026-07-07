@@ -1,0 +1,27 @@
+# Jetson (aarch64 + CUDA) API image. The base provides onnxruntime-gpu built for
+# L4T, so the InferenceEngine picks the CUDA/TensorRT execution provider.
+#
+# MATCH this base tag to your JetPack / L4T version (`cat /etc/nv_tegra_release`):
+#   JetPack 6.0  (L4T r36.2) -> dustynv/onnxruntime:r36.2.0
+#   JetPack 6.1  (L4T r36.4) -> dustynv/onnxruntime:r36.4.0
+# Override at build time: --build-arg BASE_IMAGE=dustynv/onnxruntime:r36.4.0
+ARG BASE_IMAGE=dustynv/onnxruntime:r36.2.0
+FROM ${BASE_IMAGE}
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python deps EXCEPT onnxruntime — the base image already ships the GPU
+# build; the pip CPU wheel would shadow it and disable GPU inference.
+COPY requirements.txt .
+RUN grep -v '^onnxruntime' requirements.txt > requirements.jetson.txt \
+    && pip3 install --no-cache-dir -r requirements.jetson.txt
+
+COPY . .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]

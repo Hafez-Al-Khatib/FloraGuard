@@ -1,0 +1,6 @@
+# InfluxDB 2.x runtime configuration
+# Most settings are injected via Docker environment variables.
+# This file can be extended for fine-tuned HTTP, storage, or logging options.
+
+http-bind-address: :8086
+log-level: info

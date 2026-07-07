@@ -1,0 +1,2 @@
+Place exported ONNX models here (e.g., yolo11n_agri_int8.onnx).
+These files are excluded from git by .gitignore due to size.

@@ -1,0 +1,110 @@
+version: "3.9"
+
+# DEVELOPMENT ONLY: runs Mosquitto without TLS, Redis without password, and
+# mounts the API source code live (no rebuild needed for Python changes).
+# Do NOT use this file in production or on a real farm network.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: pms-redis-dev
+    command: redis-server --appendonly yes --appendfsync everysec
+    volumes:
+      - redis-dev-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - pms-dev-net
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: pms-mosquitto-dev
+    volumes:
+      - ./mosquitto/config/mosquitto.dev.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-dev-data:/mosquitto/data
+      - mosquitto-dev-log:/mosquitto/log
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    networks:
+      - pms-dev-net
+    environment:
+      - MOSQUITTO_USERNAME=${MQTT_USERNAME}
+      - MOSQUITTO_PASSWORD=${MQTT_PASSWORD}
+
+  influxdb:
+    image: influxdb:2
+    container_name: pms-influxdb-dev
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=${INFLUXDB_USERNAME}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_PASSWORD}
+      - DOCKER_INFLUXDB_INIT_ORG=${INFLUXDB_ORG:-plantmonitor}
+      - DOCKER_INFLUXDB_INIT_BUCKET=${INFLUXDB_BUCKET:-telemetry}
+      - DOCKER_INFLUXDB_INIT_RETENTION=${INFLUXDB_RETENTION:-30d}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN}
+    volumes:
+      - influxdb-dev-data:/var/lib/influxdb2
+    ports:
+      - "8086:8086"
+    networks:
+      - pms-dev-net
+
+  api:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: pms-api-dev
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+      - MQTT_USERNAME=${MQTT_USERNAME}
+      - MQTT_PASSWORD=${MQTT_PASSWORD}
+      - INFLUXDB_URL=http://influxdb:8086
+      - INFLUXDB_TOKEN=${INFLUXDB_TOKEN}
+      - INFLUXDB_ORG=${INFLUXDB_ORG:-plantmonitor}
+      - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-telemetry}
+      - API_AUTH_TOKEN=${API_AUTH_TOKEN}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://plant-hub.local,http://localhost:8080}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      # Chat provider — only outbound internet call
+      - CHAT_PROVIDER=${CHAT_PROVIDER:-gemini}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-haiku-4-5-20251001}
+    volumes:
+      - ./app:/app
+      - ./app/models:/app/models:ro
+      - api-dev-uploads:/app/uploads
+    ports:
+      - "8000:8000"
+    networks:
+      - pms-dev-net
+
+  # Dashboard served on :8080 inside Docker.
+  # Alternative: run `flutter run -d web-server --web-port 8080` locally for hot reload.
+  dashboard:
+    build:
+      context: ../dashboard
+      dockerfile: Dockerfile
+    container_name: pms-dashboard-dev
+    ports:
+      - "8080:80"
+    networks:
+      - pms-dev-net
+
+volumes:
+  redis-dev-data:
+  mosquitto-dev-data:
+  mosquitto-dev-log:
+  influxdb-dev-data:
+  api-dev-uploads:
+
+networks:
+  pms-dev-net:
+    driver: bridge

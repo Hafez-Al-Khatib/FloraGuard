@@ -1,0 +1,17 @@
+# Jetson Orin Nano overlay — adds GPU-accelerated inference to the API.
+# Use together with the base compose:
+#   docker compose -f docker-compose.yml -f docker-compose.jetson.yml up -d
+#
+# Requires JetPack 6 with the NVIDIA container runtime set as default (see
+# deploy/jetson-setup.sh). The api is rebuilt from Dockerfile.jetson, which
+# bases on the Jetson ONNX Runtime image (onnxruntime-gpu for aarch64/CUDA).
+services:
+  api:
+    build:
+      context: ./app
+      dockerfile: Dockerfile.jetson
+    runtime: nvidia
+    environment:
+      # Expose the integrated GPU to the container.
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
