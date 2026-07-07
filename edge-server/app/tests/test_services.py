@@ -22,7 +22,7 @@ def _cfg(**over):
     return base
 
 
-def _control_cache(zone_state=None, last_seen=None):
+def _control_cache(zone_state=None, last_seen=None, controller_alive=False):
     cache = AsyncMock()
     cache.get_zone_state = AsyncMock(return_value=dict(zone_state or {}))
     cache.get_last_seen = AsyncMock(
@@ -31,6 +31,7 @@ def _control_cache(zone_state=None, last_seen=None):
     cache.set_zone_state = AsyncMock()
     cache.log_automation_decision = AsyncMock()
     cache.publish_telemetry_stream = AsyncMock()
+    cache.controller_alive = AsyncMock(return_value=controller_alive)
     return cache
 
 
@@ -212,6 +213,42 @@ async def test_control_auto_actuates_when_dry():
     assert _last_state(cache)["on"] == 1  # actuated ON
     pub.publish_command.assert_called_once()  # command published to the zone
     assert _last_decision(cache) == "ACTUATE_ON"
+
+
+@pytest.mark.anyio
+async def test_zone_bound_virtual_without_controller_ack():
+    """No recent controller heartbeat -> the actuator is VIRTUAL, even if the
+    API's own broker connection is up (that flag says nothing about a relay)."""
+    cache = _control_cache(controller_alive=False)
+    pub = MagicMock()
+    pub.connected = True  # broker up — must NOT imply hardware
+    engine = ControlEngine(Settings(), cache, pub)
+
+    await engine._evaluate("soil-1", {"moisture": "12"}, _cfg(), _NOW, _TODAY)
+
+    assert _last_state(cache)["bound"] == "virtual"
+
+
+@pytest.mark.anyio
+async def test_zone_bound_hardware_with_recent_controller_ack():
+    cache = _control_cache(controller_alive=True)
+    pub = MagicMock()
+    pub.connected = True
+    engine = ControlEngine(Settings(), cache, pub)
+
+    await engine._evaluate("soil-1", {"moisture": "12"}, _cfg(), _NOW, _TODAY)
+
+    assert _last_state(cache)["bound"] == "hardware"
+
+
+def test_publisher_disconnect_flips_connected():
+    from services import MqttPublisher
+
+    pub = MqttPublisher(Settings())
+    pub._on_connect(None, None, None, 0)
+    assert pub.connected is True
+    pub._on_disconnect(None, None, 1)
+    assert pub.connected is False
 
 
 @pytest.mark.anyio

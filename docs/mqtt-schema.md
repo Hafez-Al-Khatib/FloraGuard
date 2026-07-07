@@ -102,12 +102,60 @@ for small telemetry messages.
 
 ---
 
+## `pms/command/{zone}` — actuator commands
+
+Published by: **FastAPI** `MqttPublisher` (ControlEngine decisions + manual
+`POST /zone/{zone}/command`)  
+Subscribed by: **Controller Node** (always-on ESP32 driving the irrigation
+relay). Safe with no subscriber — the ControlEngine's Redis state remains the
+authoritative *virtual* actuator.
+
+### Payload (JSON)
+
+```json
+{
+  "action":          "on",
+  "zone":            "soil-zone-a",
+  "reason":          "moisture 12.0 < setpoint 30.0",
+  "max_run_seconds": 300,
+  "ts":              1780000000
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `action` | string | `"on"` \| `"off"` |
+| `zone` | string | Zone / soil-node id |
+| `reason` | string | Audit string, mirrors `logs:automation` |
+| `max_run_seconds` | int | Controller must ALSO enforce this locally (fail-safe off) |
+| `ts` | int | Unix seconds at publish |
+
+A controller must fail safe: relay OFF on broker disconnect and on local
+`max_run_seconds` expiry, regardless of commands.
+
+---
+
+## `pms/status/{node_id}` — controller heartbeat
+
+Published by: **Controller Node**, every ≤ 60 s while online, `retain=false`
+(a retained heartbeat would fake hardware presence after the controller dies).  
+Subscribed by: **FastAPI** `MQTTSubscriber` → refreshes
+`controller:last_seen:{node_id}` in Redis.
+
+```json
+{"node_id": "soil-zone-a", "on": false}
+```
+
+A zone reports `bound: "hardware"` on the dashboard only while a heartbeat is
+fresher than `SENSOR_SANITY_MAX_AGE_SECONDS`; otherwise the actuator shows
+`VIRTUAL`.
+
+---
+
 ## Reserved topics (future work)
 
 | Topic | Direction | Purpose |
 |---|---|---|
-| `pms/status/{node_id}` | node → broker | Heartbeat / connectivity check |
-| `pms/command/{node_id}` | broker → node | Remote config (sleep interval, threshold) |
 | `pms/ota/{node_id}` | broker → node | OTA firmware trigger |
 
 ---
@@ -121,4 +169,4 @@ camera-{zone}                e.g. camera-zone-a
 
 A "zone" groups the plants monitored by one camera + one soil node:
 - 1 × Camera Node  (OV2640, covers ~4–6 plants in a row)
-- 1 × Soil Node    (RS485 bus, up to 4 soil sensors per board)
+- 1 × Soil Node    (analog HW-103/HW-080 capacitive probe on an ADC pin)

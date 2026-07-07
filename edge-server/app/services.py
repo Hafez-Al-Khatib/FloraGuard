@@ -162,6 +162,19 @@ class Cache:
         """Current token for a node (reverse index), or None if never issued."""
         return await self._text_redis().get(f"auth:devicetoken:{node_id}")
 
+    # ---------- controller (actuator hardware) liveness ----------
+    # A zone counts as hardware-bound only while a controller node keeps
+    # heartbeating on pms/status/{node_id}. Inferring it from the API's own
+    # broker connection lied whenever Mosquitto was up but no relay existed.
+    async def set_controller_seen(self, zone: str) -> None:
+        await self._text_redis().set(
+            f"controller:last_seen:{zone}", str(int(time.time()))
+        )
+
+    async def controller_alive(self, zone: str, max_age_seconds: int) -> bool:
+        v = await self._text_redis().get(f"controller:last_seen:{zone}")
+        return bool(v) and (int(time.time()) - int(v)) <= max_age_seconds
+
     async def revoke_device_token(self, node_id: str) -> bool:
         r = self._text_redis()
         old = await r.get(f"auth:devicetoken:{node_id}")
@@ -815,16 +828,29 @@ class MqttPublisher:
         self._host = settings.mqtt_host
         self._port = settings.mqtt_port
         self.connected = False
+        self._client.on_connect = self._on_connect
+        self._client.on_disconnect = self._on_disconnect
+
+    def _on_connect(self, client, userdata, flags, rc):  # noqa: ARG002
+        self.connected = rc == 0
+        if rc == 0:
+            _log.info("mqtt_publisher_connected host=%s port=%s", self._host, self._port)
+        else:
+            _log.error("mqtt_publisher_connect_failed rc=%s", rc)
+
+    def _on_disconnect(self, client, userdata, rc):  # noqa: ARG002
+        self.connected = False
+        _log.warning("mqtt_publisher_disconnected rc=%s", rc)
 
     def start(self) -> None:
         try:
-            self._client.connect(self._host, self._port, keepalive=60)
+            # connect_async + loop_start: paho keeps retrying in the background,
+            # so a broker that is down at API boot (or dies later) is picked up
+            # again automatically and `connected` tracks reality via callbacks.
+            self._client.connect_async(self._host, self._port, keepalive=60)
             self._client.loop_start()
-            self.connected = True
-            _log.info("mqtt_publisher_started host=%s port=%s", self._host, self._port)
         except Exception as exc:
             _log.warning("mqtt_publisher_unavailable error=%s", exc)
-            self.connected = False
 
     def publish_command(self, zone: str, payload: dict) -> None:
         topic = f"pms/command/{zone}"
@@ -1016,7 +1042,13 @@ class ControlEngine:
                                                         "run_today": run_today})
 
     async def _actuate(self, zone, on, now, run_today, day, last_off, reason, cfg) -> None:
-        bound = "hardware" if (self._pub and self._pub.connected) else "virtual"
+        # Hardware means a controller node recently heartbeated on
+        # pms/status/{zone} — the API's own broker connection proves nothing
+        # about a relay existing (Mosquitto is always up in Docker).
+        alive = await self._cache.controller_alive(
+            zone, self._settings.sensor_sanity_max_age_seconds
+        )
+        bound = "hardware" if alive else "virtual"
         new_state = {
             "on": 1 if on else 0,
             "since": now if on else 0,
@@ -1094,6 +1126,7 @@ class MQTTSubscriber:
     """
 
     TOPIC = "pms/telemetry/#"
+    STATUS_TOPIC = "pms/status/#"
 
     def __init__(
         self,
@@ -1126,6 +1159,7 @@ class MQTTSubscriber:
         if rc == 0:
             _log.info("mqtt_subscriber_connected host=%s port=%s", self._host, self._port)
             client.subscribe(self.TOPIC)
+            client.subscribe(self.STATUS_TOPIC)
         else:
             _log.error("mqtt_subscriber_connect_failed rc=%s", rc)
 
@@ -1135,6 +1169,15 @@ class MQTTSubscriber:
         except (json.JSONDecodeError, UnicodeDecodeError):
             _log.warning("mqtt_invalid_payload topic=%s", msg.topic)
             return
+        # Controller heartbeat (pms/status/{node_id}) — proof a relay exists.
+        # Retained status would fake hardware presence, so it is ignored.
+        if msg.topic.startswith("pms/status/"):
+            if not msg.retain:
+                fut = asyncio.run_coroutine_threadsafe(
+                    self._ingest_status(payload), self._loop
+                )
+                fut.add_done_callback(_log_ingest_outcome)
+            return
         # Dispatch to the asyncio event loop — safe to call from any thread.
         # The done-callback observes the future: without it an exception inside
         # _ingest (e.g. Redis down) vanishes silently and telemetry just stops.
@@ -1142,6 +1185,13 @@ class MQTTSubscriber:
             self._ingest(payload, retained=bool(msg.retain)), self._loop
         )
         fut.add_done_callback(_log_ingest_outcome)
+
+    async def _ingest_status(self, payload: dict) -> None:
+        node_id = str(payload.get("node_id", "")).strip()
+        if not node_id or not _NODE_ID_RE.match(node_id):
+            _log.warning("mqtt_bad_status_node_id value=%r", node_id)
+            return
+        await self._cache.set_controller_seen(node_id)
 
     # ── async ingest (runs on the main event loop) ────────────────────────────
 
