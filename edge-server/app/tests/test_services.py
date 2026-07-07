@@ -30,7 +30,7 @@ def _control_cache(zone_state=None, last_seen=None, controller_alive=False):
     )
     cache.set_zone_state = AsyncMock()
     cache.log_automation_decision = AsyncMock()
-    cache.publish_telemetry_stream = AsyncMock()
+    cache.emit_event = AsyncMock()
     cache.controller_alive = AsyncMock(return_value=controller_alive)
     return cache
 
@@ -133,7 +133,7 @@ async def test_alert_engine_raises_once_then_clears():
         return_value={"issue": "None", "confidence": 0.0}
     )
     cache.add_alert = AsyncMock()
-    cache.publish_telemetry_stream = AsyncMock()
+    cache.emit_event = AsyncMock()
 
     # Track active-alert state in-memory so de-dup logic is exercised.
     active: set[str] = set()

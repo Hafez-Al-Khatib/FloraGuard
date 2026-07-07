@@ -516,7 +516,7 @@ async def test_upload_frame_auto_analyzes(client: AsyncClient):
     mock_cache.set_camera_frame = AsyncMock()
     mock_cache.set_camera_diagnostics = AsyncMock()
     mock_cache.register_node = AsyncMock()
-    mock_cache.publish_telemetry_stream = AsyncMock()
+    mock_cache.emit_event = AsyncMock()
     mock_cache.log_automation_decision = AsyncMock()
     app.dependency_overrides[get_cache] = lambda: mock_cache
 
