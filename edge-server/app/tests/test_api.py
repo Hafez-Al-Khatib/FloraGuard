@@ -512,9 +512,11 @@ async def test_upload_frame_auto_analyzes(client: AsyncClient):
         headers={**AUTH, "Content-Type": "image/jpeg", "Content-Length": str(len(jpeg))},
     )
     assert response.status_code == 200
-    # Frame analyzed on upload: detection cached, node paired, suggestion logged.
+    # Frame analyzed on upload: detection cached, node marked seen (write-once,
+    # never register_node — that would overwrite profile/liveness), suggestion logged.
     mock_cache.set_camera_diagnostics.assert_awaited_once()
-    mock_cache.register_node.assert_awaited()
+    mock_cache.note_node_seen.assert_awaited()
+    mock_cache.register_node.assert_not_awaited()
     mock_cache.log_automation_decision.assert_awaited_once()
 
 

@@ -186,7 +186,9 @@ async def _record_detection(
     await cache.set_camera_diagnostics(
         node_id, {"issue": label, "confidence": confidence, "timestamp": detected_at}
     )
-    await cache.register_node(node_id, profile={"kind": "camera"})
+    # Write-once: a detection on a node that also reports soil telemetry must
+    # not flip its profile to "camera" (that hides its irrigation controls).
+    await cache.note_node_seen(node_id, default_profile={"kind": "camera"})
     await cache.publish_telemetry_stream({
         "node_id": node_id,
         "data": json.dumps({

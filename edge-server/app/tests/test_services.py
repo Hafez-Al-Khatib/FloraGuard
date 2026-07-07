@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from config import Settings
-from services import AlertEngine, Cache, ControlEngine
+from services import AlertEngine, Cache, ControlEngine, MQTTSubscriber
 
 
 def _cfg(**over):
@@ -124,6 +124,62 @@ async def test_alert_engine_raises_once_then_clears():
     cache.get_last_seen = AsyncMock(return_value=int(time.time()))  # back online
     await engine._scan()
     assert cache.add_alert.await_count == 2  # cleared emitted once
+
+
+# ── MQTT ingest: retained messages must not fake liveness ────────────────────
+
+def _subscriber(mock_cache):
+    return MQTTSubscriber(Settings(), mock_cache, None, None)
+
+
+def _ingest_cache():
+    cache = AsyncMock()
+    cache.note_node_seen = AsyncMock()
+    cache.touch_node = AsyncMock()
+    cache.set_telemetry = AsyncMock()
+    cache.publish_telemetry_stream = AsyncMock()
+    return cache
+
+
+@pytest.mark.anyio
+async def test_retained_message_does_not_refresh_last_seen():
+    """A broker-redelivered retained reading may be days old: cache the value
+    for display, but never refresh liveness or emit a live SSE event — the
+    ControlEngine's stale-sensor interlock depends on honest last_seen."""
+    cache = _ingest_cache()
+    sub = _subscriber(cache)
+
+    await sub._ingest({"node_id": "soil-a", "moisture": 40.0}, retained=True)
+
+    cache.set_telemetry.assert_awaited()                    # value still cached
+    cache.touch_node.assert_not_awaited()                   # liveness untouched
+    cache.publish_telemetry_stream.assert_not_awaited()     # no fake-live SSE
+
+
+@pytest.mark.anyio
+async def test_live_message_refreshes_last_seen():
+    cache = _ingest_cache()
+    sub = _subscriber(cache)
+
+    await sub._ingest({"node_id": "soil-a", "moisture": 40.0}, retained=False)
+
+    cache.touch_node.assert_awaited()
+    cache.publish_telemetry_stream.assert_awaited()
+
+
+@pytest.mark.anyio
+async def test_ingest_does_not_overwrite_profile():
+    """Ingest marks the node as seen with a write-once default profile; it must
+    never call register_node, which overwrites kind and resets last_seen."""
+    cache = _ingest_cache()
+    sub = _subscriber(cache)
+
+    await sub._ingest({"node_id": "cam-a", "moisture": 40.0})
+
+    cache.note_node_seen.assert_awaited_with(
+        "cam-a", default_profile={"kind": "soil"}
+    )
+    cache.register_node.assert_not_awaited()
 
 
 @pytest.mark.anyio

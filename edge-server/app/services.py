@@ -106,6 +106,22 @@ class Cache:
         # Track last-seen so the dashboard can dim stale cards.
         await r.set(f"nodes:last_seen:{node_id}", str(int(time.time())))
 
+    async def note_node_seen(
+        self, node_id: str, default_profile: dict | None = None
+    ) -> None:
+        """Idempotent 'this node exists' marker for ingest paths.
+
+        Unlike register_node this never overwrites an existing profile and
+        never touches last_seen — a retained MQTT message or a detection must
+        not make a dead node look alive or flip its kind.
+        """
+        r = self._text_redis()
+        await r.sadd("nodes:registered", node_id)
+        if default_profile:
+            for k, v in default_profile.items():
+                if v is not None:
+                    await r.hsetnx(f"nodes:profile:{node_id}", k, str(v))
+
     async def touch_node(self, node_id: str) -> None:
         """Update the last-seen timestamp without changing the profile."""
         await self._text_redis().set(
@@ -654,6 +670,13 @@ def _to_float(value) -> float | None:
         return None
 
 
+def _log_ingest_outcome(fut) -> None:
+    """Observe an MQTT-dispatched ingest future so failures are never silent."""
+    exc = fut.exception()
+    if exc is not None:
+        _log.error("mqtt_ingest_failed error=%s", exc)
+
+
 class AlertEngine:
     """Background task that raises/clears alerts for offline nodes and
     out-of-range telemetry, emitting each transition once.
@@ -1112,25 +1135,33 @@ class MQTTSubscriber:
         except (json.JSONDecodeError, UnicodeDecodeError):
             _log.warning("mqtt_invalid_payload topic=%s", msg.topic)
             return
-        # Dispatch to the asyncio event loop — safe to call from any thread
-        asyncio.run_coroutine_threadsafe(self._ingest(payload), self._loop)
+        # Dispatch to the asyncio event loop — safe to call from any thread.
+        # The done-callback observes the future: without it an exception inside
+        # _ingest (e.g. Redis down) vanishes silently and telemetry just stops.
+        fut = asyncio.run_coroutine_threadsafe(
+            self._ingest(payload, retained=bool(msg.retain)), self._loop
+        )
+        fut.add_done_callback(_log_ingest_outcome)
 
     # ── async ingest (runs on the main event loop) ────────────────────────────
 
-    async def _ingest(self, payload: dict) -> None:
+    async def _ingest(self, payload: dict, retained: bool = False) -> None:
         node_id = str(payload.get("node_id", "")).strip()
         if not node_id or not _NODE_ID_RE.match(node_id):
             _log.warning("mqtt_bad_node_id value=%r", node_id)
             return
 
         # First sighting? Persist the pairing so the dashboard card never drops
-        # off even if the device goes dark for a while. Cheap SADD — no-op if
-        # already registered.
-        await self._cache.register_node(node_id, profile={"kind": "soil"})
+        # off even if the device goes dark for a while. Write-once: never
+        # overwrites a profile set at pairing, never touches last_seen — a
+        # retained message redelivered by the broker must not fake liveness.
+        await self._cache.note_node_seen(node_id, default_profile={"kind": "soil"})
 
         # Wake-up "hello" message: a soil node announces itself on boot before
         # the first reading. No sensor fields present → just refresh last_seen.
         if payload.get("hello") is True:
+            if retained:
+                return
             await self._cache.touch_node(node_id)
             _log.info("mqtt_node_hello node_id=%s", node_id)
             # Tell SSE consumers the card should appear immediately.
@@ -1142,7 +1173,8 @@ class MQTTSubscriber:
         # Silently skip sentinel readings where sensor reported an error
         if not payload.get("sensor_ok", True):
             _log.info("mqtt_sensor_offline node_id=%s", node_id)
-            await self._cache.touch_node(node_id)
+            if not retained:
+                await self._cache.touch_node(node_id)
             return
 
         fields: dict[str, float] = {}
@@ -1179,6 +1211,12 @@ class MQTTSubscriber:
             await self._cache.set_telemetry(node_id, "free_heap", int(free_heap))
 
         if not fields:
+            return
+
+        if retained:
+            # Values are cached above for display (last-known reading after a
+            # backend restart) but a retained message proves nothing about the
+            # node being alive NOW — no last_seen refresh, no live SSE event.
             return
 
         await self._cache.touch_node(node_id)
