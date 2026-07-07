@@ -202,6 +202,18 @@ async def test_live_message_refreshes_last_seen():
 
 
 @pytest.mark.anyio
+async def test_mqtt_ingest_stores_canonical_temperature():
+    """The cache key is 'temperature' everywhere — the old 'temp' key forced
+    every egress point to remember a secret rename."""
+    cache = _ingest_cache()
+    sub = _subscriber(cache)
+
+    await sub._ingest({"node_id": "soil-a", "temperature": 22.5})
+
+    cache.set_telemetry.assert_any_await("soil-a", "temperature", 22.5)
+
+
+@pytest.mark.anyio
 async def test_ingest_does_not_overwrite_profile():
     """Ingest marks the node as seen with a write-once default profile; it must
     never call register_node, which overwrites kind and resets last_seen."""

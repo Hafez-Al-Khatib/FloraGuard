@@ -493,10 +493,10 @@ async def latest_telemetry(
 
     return {
         "node_id": node_id,
-        # Cache stores ambient temperature under the "temp" key; expose it as
-        # "temperature" to match the telemetry ingestion schema and the client.
         "moisture": _as_float(raw.get("moisture")),
-        "temperature": _as_float(raw.get("temp")),
+        # Canonical key is "temperature"; the "temp" fallback drains old cached
+        # values written before the rename (safe to drop once caches roll over).
+        "temperature": _as_float(raw.get("temperature", raw.get("temp"))),
         "ec": _as_float(raw.get("ec")),
         "battery_pct": _as_float(raw.get("battery_pct")),
         # Firmware health diagnostics (populated by the MQTT subscriber when
@@ -739,7 +739,7 @@ async def ingest_telemetry(
         await cache.set_telemetry(payload.node_id, "moisture", payload.moisture)
         fields["moisture"] = payload.moisture
     if payload.temperature is not None:
-        await cache.set_telemetry(payload.node_id, "temp", payload.temperature)
+        await cache.set_telemetry(payload.node_id, "temperature", payload.temperature)
         fields["temperature"] = payload.temperature
     if payload.ec is not None:
         await cache.set_telemetry(payload.node_id, "ec", payload.ec)

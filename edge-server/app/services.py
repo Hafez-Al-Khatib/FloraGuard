@@ -575,7 +575,8 @@ class AgronomistChat:
         return (
             f"Node: {node_id}\n"
             f"Volumetric Soil Moisture: {telemetry.get('moisture', 'N/A')}%\n"
-            f"Ambient Temperature: {telemetry.get('temp', 'N/A')} C\n"
+            f"Ambient Temperature: "
+            f"{telemetry.get('temperature', telemetry.get('temp', 'N/A'))} C\n"
             f"Electrical Conductivity: {telemetry.get('ec', 'N/A')} mS/cm\n"
             f"Battery: {telemetry.get('battery_pct', 'N/A')}%\n"
             f"Vision Diagnostics: {diagnostics}\n\n"
@@ -1257,7 +1258,7 @@ class MQTTSubscriber:
             fields[cache_key] = v
 
         await _store("moisture",    "moisture",    0.0,   100.0)
-        await _store("temp",        "temperature", -50.0,  80.0)
+        await _store("temperature", "temperature", -50.0,  80.0)
         await _store("ec",          "ec",          0.0,   None)
         await _store("battery_pct", "battery_pct", 0.0,   100.0)
 
@@ -1281,19 +1282,12 @@ class MQTTSubscriber:
             return
 
         await self._cache.touch_node(node_id)
-        # Client-facing field names for the SSE feed + InfluxDB. The cache stores
-        # ambient temperature under "temp", but the dashboard's SSE merge and the
-        # HTTP ingest path both use "temperature" — normalize here so live temp
-        # updates and history queries are consistent across both ingest paths.
-        client_fields = {
-            ("temperature" if k == "temp" else k): v for k, v in fields.items()
-        }
-        await self._cache.emit_event("telemetry", node_id, client_fields)
+        await self._cache.emit_event("telemetry", node_id, fields)
 
         if self._tsdb is not None:
             try:
                 await asyncio.to_thread(
-                    self._tsdb.write_telemetry, node_id, client_fields
+                    self._tsdb.write_telemetry, node_id, fields
                 )
             except Exception as exc:
                 _log.error("mqtt_influxdb_write_failed node_id=%s error=%s", node_id, exc)
