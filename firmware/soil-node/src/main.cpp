@@ -272,10 +272,13 @@ void setup() {
         Serial.printf("[WARN] %d/%d publishes failed this cycle\n",
                       failed, SENSOR_COUNT);
 
-    // ── 5. Drain buffer, sleep ────────────────────────────────────────────────
-    unsigned long deadline = millis() + 500;
-    while (millis() < deadline && mqtt_client.connected())
-        mqtt_client.loop();
+    // ── 5. Service connection once, sleep ────────────────────────────────────
+    // QoS0 publishes are written to the TCP socket synchronously inside
+    // publish(); one loop() services the connection state and we can drop
+    // straight to disconnect. The previous fixed 500 ms drain spin kept the
+    // WiFi radio at full power (~150 mA) every cycle for nothing — ~1% duty
+    // cycle of pure battery waste.
+    mqtt_client.loop();
 
     ++boot_count;
     mqtt_client.disconnect();
