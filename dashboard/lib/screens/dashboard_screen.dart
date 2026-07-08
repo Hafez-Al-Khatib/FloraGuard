@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
@@ -35,6 +35,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   List<String> _nodes = [];
   String? _selectedNode;
+
+  // Mobile bottom-nav tab index (GRID / ALERTS / AUTOMATION / AGRONOMIST).
+  int _tab = 0;
 
   @override
   void initState() {
@@ -112,6 +115,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
     if (shot == null) return;
 
+    HapticFeedback.mediumImpact();
     setState(() => _capturing = true);
     _toast('Analyzing leaf...');
     try {
@@ -213,63 +217,128 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return Scaffold(
       body: NatureBackground(
         child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(AppSpace.lg),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _Header(
-                  onRefresh: () {
-                    _refresh();
-                    _subscribeLive();
-                  },
-                  onCapture: _captureLeaf,
-                  capturing: _capturing,
-                  onAutomation: _openAutomation,
-                  onLogout: _logout,
-                  liveConnected: _liveConnected,
-                ),
-                _AlertsBar(alerts: _alerts),
-                const SizedBox(height: AppSpace.lg),
-                Expanded(
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      final wide = constraints.maxWidth >= 900;
-                      final grid = _TelemetryGrid(
-                        cards: cards,
-                        loading: _loading,
-                        error: _loadError,
-                        onTap: _openNodeDetail,
-                      );
-                      final chat = _ChatPanel(
-                        nodes: _nodes,
-                        selectedNode: _selectedNode,
-                        onNodeChanged: (n) => setState(() => _selectedNode = n),
-                      );
-                      if (wide) {
-                        return Row(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Expanded(flex: 3, child: grid),
-                            const SizedBox(width: AppSpace.lg),
-                            SizedBox(width: 380, child: chat),
-                          ],
-                        );
-                      }
-                      return Column(
-                        children: [
-                          Expanded(flex: 3, child: grid),
-                          const SizedBox(height: AppSpace.lg),
-                          Expanded(flex: 2, child: chat),
-                        ],
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              // Below 700px is a phone: switch to a tabbed shell with bottom nav.
+              return constraints.maxWidth < 700
+                  ? _mobileBody(cards)
+                  : _desktopBody(cards);
+            },
           ),
         ),
+      ),
+    );
+  }
+
+  _ChatPanel _chat() => _ChatPanel(
+        nodes: _nodes,
+        selectedNode: _selectedNode,
+        onNodeChanged: (n) => setState(() => _selectedNode = n),
+      );
+
+  Widget _desktopBody(List<TelemetrySnapshot> cards) {
+    return Padding(
+      padding: const EdgeInsets.all(AppSpace.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _Header(
+            onRefresh: () {
+              _refresh();
+              _subscribeLive();
+            },
+            onCapture: _captureLeaf,
+            capturing: _capturing,
+            onAutomation: _openAutomation,
+            onLogout: _logout,
+            liveConnected: _liveConnected,
+          ),
+          _AlertsBar(alerts: _alerts),
+          const SizedBox(height: AppSpace.lg),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final wide = constraints.maxWidth >= 900;
+                final grid = _TelemetryGrid(
+                  cards: cards,
+                  loading: _loading,
+                  error: _loadError,
+                  onTap: _openNodeDetail,
+                );
+                if (wide) {
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(flex: 3, child: grid),
+                      const SizedBox(width: AppSpace.lg),
+                      SizedBox(width: 380, child: _chat()),
+                    ],
+                  );
+                }
+                return Column(
+                  children: [
+                    Expanded(flex: 3, child: grid),
+                    const SizedBox(height: AppSpace.lg),
+                    Expanded(flex: 2, child: _chat()),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _mobileBody(List<TelemetrySnapshot> cards) {
+    // GRID tab: pull-to-refresh over the card grid.
+    final grid = RefreshIndicator(
+      color: AppColors.health,
+      backgroundColor: AppColors.bgLift,
+      onRefresh: () async {
+        await _refresh();
+        _subscribeLive();
+      },
+      child: _TelemetryGrid(
+        cards: cards,
+        loading: _loading,
+        error: _loadError,
+        onTap: _openNodeDetail,
+      ),
+    );
+    final tabs = <Widget>[
+      grid,
+      _AlertsList(alerts: _alerts),
+      const AutomationScreen(embedded: true),
+      _chat(),
+    ];
+    final alertCount =
+        _alerts.where((a) => a['state'] == 'raised').length;
+    return Padding(
+      padding: const EdgeInsets.all(AppSpace.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _Header(
+            onRefresh: () {
+              _refresh();
+              _subscribeLive();
+            },
+            onCapture: _captureLeaf,
+            capturing: _capturing,
+            onAutomation: _openAutomation,
+            onLogout: _logout,
+            liveConnected: _liveConnected,
+            showAutomation: false,
+          ),
+          const SizedBox(height: AppSpace.md),
+          Expanded(child: IndexedStack(index: _tab, children: tabs)),
+          _BottomNav(
+            index: _tab,
+            alertCount: alertCount,
+            onChanged: (i) => setState(() => _tab = i),
+          ),
+        ],
       ),
     );
   }
@@ -288,6 +357,7 @@ class _Header extends StatelessWidget {
   final VoidCallback onAutomation;
   final VoidCallback onLogout;
   final bool liveConnected;
+  final bool showAutomation;
   const _Header({
     required this.onRefresh,
     required this.onCapture,
@@ -295,6 +365,7 @@ class _Header extends StatelessWidget {
     required this.onAutomation,
     required this.onLogout,
     required this.liveConnected,
+    this.showAutomation = true,
   });
 
   @override
@@ -330,9 +401,13 @@ class _Header extends StatelessWidget {
           tooltip: 'Capture leaf & diagnose',
           onTap: capturing ? null : onCapture,
         ),
-        const SizedBox(width: AppSpace.sm),
-        _IconAction(
-            icon: Icons.tune, tooltip: 'Irrigation automation', onTap: onAutomation),
+        if (showAutomation) ...[
+          const SizedBox(width: AppSpace.sm),
+          _IconAction(
+              icon: Icons.tune,
+              tooltip: 'Irrigation automation',
+              onTap: onAutomation),
+        ],
         const SizedBox(width: AppSpace.sm),
         _IconAction(icon: Icons.refresh, tooltip: 'Refresh', onTap: onRefresh),
         const SizedBox(width: AppSpace.sm),
@@ -570,6 +645,9 @@ class _TelemetryGrid extends StatelessWidget {
         final cardWidth =
             constraints.maxWidth < 340 ? constraints.maxWidth : 340.0;
         return SingleChildScrollView(
+          // Always scrollable so a mobile RefreshIndicator can pull even when
+          // the grid is short; harmless on desktop.
+          physics: const AlwaysScrollableScrollPhysics(),
           child: Wrap(
             spacing: AppSpace.lg,
             runSpacing: AppSpace.lg,
@@ -605,6 +683,153 @@ class _StatusNote extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: Text(text, style: AppText.monoCaption.copyWith(color: color)),
+    );
+  }
+}
+
+/// Full-height alerts list for the mobile ALERTS tab — every alert newest
+/// first, raised ones accented, recoveries muted.
+class _AlertsList extends StatelessWidget {
+  final List<Map<String, dynamic>> alerts;
+  const _AlertsList({required this.alerts});
+
+  Color _sev(String? s) {
+    switch (s) {
+      case 'critical':
+        return AppColors.alert;
+      case 'warning':
+        return AppColors.warning;
+      default:
+        return AppColors.textSecondary;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (alerts.isEmpty) {
+      return Center(child: Text('NO ALERTS', style: AppText.monoCaption));
+    }
+    return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
+      itemCount: alerts.length,
+      separatorBuilder: (_, __) => const SizedBox(height: AppSpace.sm),
+      itemBuilder: (_, i) {
+        final a = alerts[i];
+        final raised = a['state'] == 'raised';
+        final c = raised ? _sev(a['severity'] as String?) : AppColors.textSecondary;
+        return Container(
+          padding: const EdgeInsets.all(AppSpace.md),
+          decoration: BoxDecoration(
+            color: AppColors.insetFill,
+            border: Border(left: BorderSide(color: c, width: 2)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(raised ? Icons.warning_amber : Icons.check,
+                      size: 14, color: c),
+                  const SizedBox(width: AppSpace.sm),
+                  Expanded(
+                    child: Text(
+                      '${(a['node_id'] ?? '').toString().toUpperCase()} // ${a['kind'] ?? ''}',
+                      style: AppText.monoCaption.copyWith(color: c),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  Text(
+                    (a['state'] ?? '').toString().toUpperCase(),
+                    style: AppText.monoCaption.copyWith(color: c, fontSize: 9),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpace.xs),
+              Text('${a['message'] ?? ''}', style: AppText.monoValue),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Sharp, mono-labelled bottom navigation for the phone shell. No rounded
+/// pills — a top rule and four evenly-spaced destinations.
+class _BottomNav extends StatelessWidget {
+  final int index;
+  final int alertCount;
+  final ValueChanged<int> onChanged;
+  const _BottomNav({
+    required this.index,
+    required this.alertCount,
+    required this.onChanged,
+  });
+
+  static const _items = <({IconData icon, String label})>[
+    (icon: Icons.grid_view, label: 'GRID'),
+    (icon: Icons.warning_amber, label: 'ALERTS'),
+    (icon: Icons.tune, label: 'AUTO'),
+    (icon: Icons.chat_bubble_outline, label: 'ADVISOR'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: AppColors.glassBorder)),
+      ),
+      padding: const EdgeInsets.only(top: AppSpace.sm),
+      child: Row(
+        children: [
+          for (var i = 0; i < _items.length; i++)
+            Expanded(child: _item(i)),
+        ],
+      ),
+    );
+  }
+
+  Widget _item(int i) {
+    final sel = i == index;
+    final c = sel ? AppColors.health : AppColors.textSecondary;
+    final showBadge = i == 1 && alertCount > 0;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => onChanged(i),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: AppSpace.sm),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Icon(_items[i].icon, size: 18, color: c),
+                  if (showBadge)
+                    Positioned(
+                      right: -8,
+                      top: -4,
+                      child: Container(
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                        color: AppColors.alert,
+                        child: Text('$alertCount',
+                            style: AppText.monoCaption.copyWith(
+                                color: AppColors.bgBase, fontSize: 8)),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(_items[i].label,
+                  style: AppText.monoCaption
+                      .copyWith(color: c, fontSize: 9, letterSpacing: 1)),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

@@ -1,8 +1,8 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../models/telemetry.dart';
@@ -72,6 +72,7 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
   Future<void> _sendCommand(String action) async {
     final api = context.read<AppState>().api;
     if (api == null) return;
+    HapticFeedback.mediumImpact();
     try {
       final res = await api.sendZoneCommand(widget.nodeId, action);
       if (!mounted) return;

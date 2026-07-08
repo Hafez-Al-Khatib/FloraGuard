@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/app_state.dart';
@@ -9,7 +10,10 @@ import '../widgets/glass.dart';
 /// safety interlocks, and the audit log of every automation decision. All
 /// writes go through the admin-gated /automation/config endpoint.
 class AutomationScreen extends StatefulWidget {
-  const AutomationScreen({super.key});
+  /// When embedded as a dashboard tab (mobile), the screen drops its own
+  /// Scaffold/background and back button — the host shell provides those.
+  final bool embedded;
+  const AutomationScreen({super.key, this.embedded = false});
 
   @override
   State<AutomationScreen> createState() => _AutomationScreenState();
@@ -101,40 +105,38 @@ class _AutomationScreenState extends State<AutomationScreen> {
   Widget build(BuildContext context) {
     final mode = _config['mode'] as String? ?? 'advisory';
     final estop = _config['emergency_stop'] == true;
-    return Scaffold(
-      body: NatureBackground(
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(AppSpace.lg),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _header(context),
-                const SizedBox(height: AppSpace.lg),
-                Expanded(
-                  child: _loading
-                      ? Center(
-                          child: Text('LOADING...', style: AppText.monoCaption))
-                      : SingleChildScrollView(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              _emergencyCard(estop),
-                              const SizedBox(height: AppSpace.lg),
-                              _modeCard(mode),
-                              const SizedBox(height: AppSpace.lg),
-                              _setpointsCard(),
-                              const SizedBox(height: AppSpace.lg),
-                              _auditCard(),
-                            ],
-                          ),
-                        ),
-                ),
-              ],
-            ),
+    final content = Padding(
+      padding: const EdgeInsets.all(AppSpace.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _header(context),
+          const SizedBox(height: AppSpace.lg),
+          Expanded(
+            child: _loading
+                ? Center(child: Text('LOADING...', style: AppText.monoCaption))
+                : SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _emergencyCard(estop),
+                        const SizedBox(height: AppSpace.lg),
+                        _modeCard(mode),
+                        const SizedBox(height: AppSpace.lg),
+                        _setpointsCard(),
+                        const SizedBox(height: AppSpace.lg),
+                        _auditCard(),
+                      ],
+                    ),
+                  ),
           ),
-        ),
+        ],
       ),
+    );
+    // Embedded (dashboard tab): host provides the scaffold + background.
+    if (widget.embedded) return content;
+    return Scaffold(
+      body: NatureBackground(child: SafeArea(child: content)),
     );
   }
 
@@ -147,12 +149,14 @@ class _AutomationScreenState extends State<AutomationScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          IconButton(
-            icon: const Icon(Icons.arrow_back,
-                size: 16, color: AppColors.textSecondary),
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-          const SizedBox(width: AppSpace.sm),
+          if (!widget.embedded) ...[
+            IconButton(
+              icon: const Icon(Icons.arrow_back,
+                  size: 16, color: AppColors.textSecondary),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            const SizedBox(width: AppSpace.sm),
+          ],
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -194,7 +198,10 @@ class _AutomationScreenState extends State<AutomationScreen> {
           Switch(
             value: estop,
             activeThumbColor: AppColors.alert,
-            onChanged: (v) => _patch({'emergency_stop': v ? 1 : 0}),
+            onChanged: (v) {
+              HapticFeedback.mediumImpact();
+              _patch({'emergency_stop': v ? 1 : 0});
+            },
           ),
         ],
       ),
