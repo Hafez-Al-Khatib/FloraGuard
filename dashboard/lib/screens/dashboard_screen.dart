@@ -405,10 +405,28 @@ class _AlertsBarState extends State<_AlertsBar> {
     // recorded but not surfaced as active warnings.
     final active =
         widget.alerts.where((a) => a['state'] == 'raised').toList();
-    if (active.isEmpty) return const SizedBox.shrink();
 
-    final latest = active.first;
+    // Slide + fade the bar in when the first alert is raised, and out when the
+    // last one clears — keyed on the latest alert so a new top alert re-fires.
+    final Widget content = active.isEmpty
+        ? const SizedBox(width: double.infinity, key: ValueKey('alerts-none'))
+        : _bar(active, active.first);
+    return AnimatedSwitcher(
+      duration: AppMotion.base,
+      switchInCurve: AppMotion.curve,
+      switchOutCurve: AppMotion.curve,
+      transitionBuilder: (child, anim) => FadeTransition(
+        opacity: anim,
+        child: SizeTransition(sizeFactor: anim, child: child),
+      ),
+      child: content,
+    );
+  }
+
+  Widget _bar(List<Map<String, dynamic>> active, Map<String, dynamic> latest) {
     return Padding(
+      key: ValueKey(
+          'alerts-${active.length}-${latest['node_id']}-${latest['message']}'),
       padding: const EdgeInsets.only(top: AppSpace.md),
       child: Container(
         decoration: BoxDecoration(

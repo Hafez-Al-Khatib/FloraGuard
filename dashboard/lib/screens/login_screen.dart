@@ -5,6 +5,7 @@ import '../providers/app_state.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass.dart';
+import '../widgets/painters.dart';
 import 'dashboard_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -14,12 +15,24 @@ class LoginScreen extends StatefulWidget {
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends State<LoginScreen>
+    with TickerProviderStateMixin {
   final _baseUrlController =
       TextEditingController(text: 'https://plant-hub.local');
   final _tokenController = TextEditingController();
   bool _loading = false;
   String? _error;
+
+  // Backdrop: a slow drifting scan band across a faint technical grid.
+  late final AnimationController _backdrop = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 14),
+  )..repeat();
+  // Console card fades + rises in on mount.
+  late final AnimationController _reveal = AnimationController(
+    vsync: this,
+    duration: AppMotion.slow,
+  )..forward();
 
   @override
   void initState() {
@@ -81,12 +94,31 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: NatureBackground(
-        child: Center(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(AppSpace.lg),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: GlassCard(
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: AnimatedBuilder(
+                animation: _backdrop,
+                builder: (_, __) => CustomPaint(
+                  painter: GridBackdropPainter(t: _backdrop.value),
+                ),
+              ),
+            ),
+            Center(
+              child: FadeTransition(
+                opacity: _reveal.drive(CurveTween(curve: AppMotion.curve)),
+                child: SlideTransition(
+                  position: _reveal.drive(
+                    Tween<Offset>(
+                      begin: const Offset(0, 0.04),
+                      end: Offset.zero,
+                    ).chain(CurveTween(curve: AppMotion.curve)),
+                  ),
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(AppSpace.lg),
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: GlassCard(
                 padding: const EdgeInsets.all(AppSpace.xl),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -138,11 +170,17 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ),
       ),
+    ),
+            ],
+          ),
+        ),
     );
   }
 
   @override
   void dispose() {
+    _backdrop.dispose();
+    _reveal.dispose();
     _baseUrlController.dispose();
     _tokenController.dispose();
     super.dispose();

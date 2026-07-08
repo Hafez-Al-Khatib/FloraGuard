@@ -58,6 +58,7 @@ class _TelemetryCardState extends State<TelemetryCard>
   Uint8List? _frame;
   DateTime? _frameFor;
   bool _fetching = false;
+  bool _hover = false;
 
   @override
   void initState() {
@@ -166,20 +167,35 @@ class _TelemetryCardState extends State<TelemetryCard>
           // the glass card during the animation rather than recreating the
           // glass itself.
           final t = 1.0 - _pulse.value;
-          return DecoratedBox(
+          final glow = 0.6 * t;
+          // A live pulse takes precedence; otherwise a hovered card brightens
+          // its border. Sharp shadow (not a diffused glow) lifts on hover.
+          final Color borderColor;
+          if (glow > 0.01) {
+            borderColor = AppColors.health.withValues(alpha: glow);
+          } else if (_hover) {
+            borderColor = AppColors.glassBorderHover;
+          } else {
+            borderColor = const Color(0x00000000);
+          }
+          return AnimatedContainer(
+            duration: AppMotion.fast,
+            curve: AppMotion.curve,
             decoration: BoxDecoration(
-              border: Border.all(
-                color: AppColors.health.withValues(alpha: 0.6 * t),
-                width: 1,
-              ),
-              boxShadow: t > 0.01
-                  ? [
-                      BoxShadow(
-                        color: AppColors.health.withValues(alpha: 0.25 * t),
-                        blurRadius: 16 * t,
-                      ),
-                    ]
-                  : const [],
+              border: Border.all(color: borderColor, width: 1),
+              boxShadow: [
+                if (t > 0.01)
+                  BoxShadow(
+                    color: AppColors.health.withValues(alpha: 0.25 * t),
+                    blurRadius: 16 * t,
+                  ),
+                if (_hover && t <= 0.01)
+                  const BoxShadow(
+                    color: Color(0x66000000),
+                    blurRadius: 28,
+                    offset: Offset(0, 14),
+                  ),
+              ],
             ),
             child: child,
           );
@@ -238,6 +254,8 @@ class _TelemetryCardState extends State<TelemetryCard>
     if (widget.onTap == null) return entered;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
