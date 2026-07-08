@@ -265,6 +265,9 @@ Color _batteryColor(double? b) {
   return AppColors.alert;
 }
 
+/// Shared Hero tag so a card's gauge/frame morphs into the detail screen's.
+String heroTagFor(String nodeId) => 'node-hero-$nodeId';
+
 /// Header pulse dot: a sharp 6px square that flashes on a fresh delta and is
 /// invisible at rest. Shares the [_pulse] controller with the border flash.
 class _PulseDot extends StatelessWidget {
@@ -290,45 +293,6 @@ class _PulseDot extends StatelessWidget {
   }
 }
 
-/// Animated arc gauge headlining a soil card's moisture. Sweeps in on mount and
-/// tweens between values; the centre reads the live figure.
-class _MoistureGauge extends StatelessWidget {
-  final double? moisture;
-  final Color color;
-  const _MoistureGauge({required this.moisture, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    final target = (moisture ?? 0).clamp(0.0, 100.0).toDouble();
-    return SizedBox(
-      width: 104,
-      height: 104,
-      child: TweenAnimationBuilder<double>(
-        tween: Tween<double>(begin: 0, end: target),
-        duration: AppMotion.slow,
-        curve: AppMotion.emphasize,
-        builder: (context, v, _) {
-          return CustomPaint(
-            painter: RingGaugePainter(value: v, progress: 1, color: color),
-            child: Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    moisture == null ? '--' : v.toStringAsFixed(0),
-                    style: AppText.metric.copyWith(fontSize: 30),
-                  ),
-                  Text('% VWC', style: AppText.monoCaption),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
 /// Soil-node card body: moisture ring gauge + temp/EC readouts, battery bar,
 /// optional irrigation status.
 class _SoilBody extends StatelessWidget {
@@ -346,7 +310,13 @@ class _SoilBody extends StatelessWidget {
         Row(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            _MoistureGauge(moisture: snapshot.moisture, color: state.color),
+            Hero(
+              tag: heroTagFor(snapshot.nodeId),
+              child: MoistureGauge(
+                moisture: snapshot.moisture,
+                color: state.color,
+              ),
+            ),
             const SizedBox(width: AppSpace.lg),
             Expanded(
               child: Column(
@@ -433,7 +403,9 @@ class _CameraBody extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        AspectRatio(
+        Hero(
+          tag: heroTagFor(snapshot.nodeId),
+          child: AspectRatio(
           aspectRatio: 16 / 10,
           child: DecoratedBox(
             decoration: BoxDecoration(
@@ -514,6 +486,7 @@ class _CameraBody extends StatelessWidget {
                   ),
               ],
             ),
+          ),
           ),
         ),
         if (hasDet) ...[

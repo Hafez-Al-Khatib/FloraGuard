@@ -66,6 +66,55 @@ class RingGaugePainter extends CustomPainter {
       old.value != value || old.progress != progress || old.color != color;
 }
 
+/// Animated moisture ring gauge, shared by the telemetry card and the node
+/// detail hero (at different [size]s) so the Hero flight morphs between two
+/// instances of the same widget. Sweeps in on mount and tweens on change.
+class MoistureGauge extends StatelessWidget {
+  final double? moisture;
+  final Color color;
+  final double size;
+  final double valueFontSize;
+
+  const MoistureGauge({
+    super.key,
+    required this.moisture,
+    required this.color,
+    this.size = 104,
+    this.valueFontSize = 30,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final target = (moisture ?? 0).clamp(0.0, 100.0).toDouble();
+    return SizedBox(
+      width: size,
+      height: size,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: 0, end: target),
+        duration: AppMotion.slow,
+        curve: AppMotion.emphasize,
+        builder: (context, v, _) {
+          return CustomPaint(
+            painter: RingGaugePainter(value: v, progress: 1, color: color),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    moisture == null ? '--' : v.toStringAsFixed(0),
+                    style: AppText.metric.copyWith(fontSize: valueFontSize),
+                  ),
+                  Text('% VWC', style: AppText.monoCaption),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 // ── Node-kind glyphs ─────────────────────────────────────────────────────────
 
 enum NodeGlyph { soil, camera, controller }

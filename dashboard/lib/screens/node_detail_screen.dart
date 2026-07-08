@@ -9,6 +9,8 @@ import '../models/telemetry.dart';
 import '../providers/app_state.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glass.dart';
+import '../widgets/painters.dart';
+import '../widgets/telemetry_card.dart' show heroTagFor;
 
 /// Full-screen technical readout for a single node. Reached by tapping a
 /// telemetry card. Subscribes to the same SSE stream as the dashboard so the
@@ -200,7 +202,17 @@ class _DetailHeader extends StatelessWidget {
   }
 }
 
-/// Headline moisture metric, scaled up vs the card view.
+/// Moisture-state accent color, matching the telemetry card's gauge so the
+/// Hero flight morphs geometry without a color jump.
+Color _moistureColor(double? m) {
+  if (m == null) return AppColors.textSecondary;
+  if (m >= 40 && m <= 70) return AppColors.health;
+  if ((m >= 25 && m < 40) || (m > 70 && m <= 85)) return AppColors.warning;
+  return AppColors.alert;
+}
+
+/// Headline moisture, scaled up vs the card view. The gauge is the shared Hero
+/// element that flies in from the tapped card.
 class _HeroPanel extends StatelessWidget {
   final TelemetrySnapshot snapshot;
   const _HeroPanel({required this.snapshot});
@@ -208,30 +220,35 @@ class _HeroPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final m = snapshot.moisture;
+    final c = _moistureColor(m);
     return GlassCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          const SectionLabel('Soil Moisture'),
-          const SizedBox(height: AppSpace.sm),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
-            children: [
-              Text(
-                m == null ? '--' : m.toStringAsFixed(1),
-                style: AppText.metric.copyWith(fontSize: 64),
-              ),
-              const SizedBox(width: AppSpace.md),
-              Text('% VWC', style: AppText.monoCaption),
-            ],
+          Hero(
+            tag: heroTagFor(snapshot.nodeId),
+            child: MoistureGauge(
+              moisture: m,
+              color: c,
+              size: 148,
+              valueFontSize: 46,
+            ),
           ),
-          const SizedBox(height: AppSpace.sm),
-          MicroBar(
-            label: 'Saturation',
-            valueText: m == null ? '--' : '${m.toStringAsFixed(1)}%',
-            ratio: (m ?? 0) / 100.0,
-            color: AppColors.health,
+          const SizedBox(width: AppSpace.lg),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SectionLabel('Soil Moisture'),
+                const SizedBox(height: AppSpace.md),
+                MicroBar(
+                  label: 'Saturation',
+                  valueText: m == null ? '--' : '${m.toStringAsFixed(1)}%',
+                  ratio: (m ?? 0) / 100.0,
+                  color: c,
+                ),
+              ],
+            ),
           ),
         ],
       ),
@@ -436,6 +453,8 @@ class _HistoryChartPanelState extends State<_HistoryChartPanel> {
     final minY = (_min() - 5).clamp(0, 100).toDouble();
     final maxY = (_max() + 5).clamp(0, 100).toDouble();
     return LineChart(
+      duration: AppMotion.draw,
+      curve: AppMotion.emphasize,
       LineChartData(
         minY: minY,
         maxY: maxY,
@@ -470,7 +489,14 @@ class _HistoryChartPanelState extends State<_HistoryChartPanel> {
             dotData: const FlDotData(show: false),
             belowBarData: BarAreaData(
               show: true,
-              color: AppColors.health.withValues(alpha: 0.08),
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  AppColors.health.withValues(alpha: 0.28),
+                  AppColors.health.withValues(alpha: 0.0),
+                ],
+              ),
             ),
           ),
         ],
@@ -523,7 +549,7 @@ class _RangeChip extends StatelessWidget {
 /// Irrigation actuator panel for a soil zone: current state + manual ON/OFF.
 /// Shows a VIRTUAL badge when no controller node is bound, so the operator
 /// knows the relay is simulated.
-class _ActuatorPanel extends StatelessWidget {
+class _ActuatorPanel extends StatefulWidget {
   final TelemetrySnapshot snapshot;
   final VoidCallback onOn;
   final VoidCallback onOff;
@@ -534,7 +560,25 @@ class _ActuatorPanel extends StatelessWidget {
   });
 
   @override
+  State<_ActuatorPanel> createState() => _ActuatorPanelState();
+}
+
+class _ActuatorPanelState extends State<_ActuatorPanel>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _flow = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _flow.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final snapshot = widget.snapshot;
     final on = snapshot.actuatorOn == true;
     final virtual = snapshot.actuatorBound != 'hardware';
     final c = on ? AppColors.health : AppColors.textSecondary;
@@ -574,6 +618,22 @@ class _ActuatorPanel extends StatelessWidget {
             'MODE ${(snapshot.actuatorMode ?? '--').toUpperCase()}  //  ${(snapshot.actuatorReason ?? '--').toUpperCase()}',
             style: AppText.monoCaption,
           ),
+          const SizedBox(height: AppSpace.md),
+          // Marching-dash flow line: animates left→right while irrigating, a
+          // faint static rule when off.
+          SizedBox(
+            height: 8,
+            child: AnimatedBuilder(
+              animation: _flow,
+              builder: (_, __) => CustomPaint(
+                painter: FlowLinePainter(
+                  phase: _flow.value,
+                  active: on,
+                  color: AppColors.health,
+                ),
+              ),
+            ),
+          ),
           const TechnicalDivider(),
           Row(
             children: [
@@ -582,7 +642,7 @@ class _ActuatorPanel extends StatelessWidget {
                   label: 'IRRIGATE ON',
                   color: AppColors.health,
                   expand: true,
-                  onTap: onOn,
+                  onTap: widget.onOn,
                 ),
               ),
               const SizedBox(width: AppSpace.md),
@@ -591,7 +651,7 @@ class _ActuatorPanel extends StatelessWidget {
                   label: 'STOP OFF',
                   color: AppColors.alert,
                   expand: true,
-                  onTap: onOff,
+                  onTap: widget.onOff,
                 ),
               ),
             ],
@@ -615,15 +675,36 @@ class _VisionPanel extends StatefulWidget {
   State<_VisionPanel> createState() => _VisionPanelState();
 }
 
-class _VisionPanelState extends State<_VisionPanel> {
+class _VisionPanelState extends State<_VisionPanel>
+    with SingleTickerProviderStateMixin {
   Uint8List? _image;
   bool _loadingImage = true;
   List<dynamic>? _treatments;
+
+  late final AnimationController _scan = AnimationController(
+    vsync: this,
+    duration: AppMotion.draw,
+  );
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void didUpdateWidget(covariant _VisionPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A fresh detection (new timestamp) re-runs the analysis scanline sweep.
+    if (widget.snapshot.detectionAt != oldWidget.snapshot.detectionAt) {
+      _scan.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _scan.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -637,6 +718,8 @@ class _VisionPanelState extends State<_VisionPanel> {
       _loadingImage = false;
       _treatments = diag?['treatments'] as List<dynamic>?;
     });
+    // Sweep once the frame is on screen.
+    if (_image != null) _scan.forward(from: 0);
   }
 
   @override
@@ -654,20 +737,42 @@ class _VisionPanelState extends State<_VisionPanel> {
         children: [
           const SectionLabel('Crop Vision // Latest Detection'),
           const SizedBox(height: AppSpace.md),
-          // Captured frame.
-          AspectRatio(
-            aspectRatio: 4 / 3,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: AppColors.insetFill,
-                border: Border.all(color: AppColors.glassBorder),
+          // Captured frame — the shared Hero element flying in from the card,
+          // with viewfinder brackets and an analysis scanline sweep.
+          Hero(
+            tag: heroTagFor(widget.nodeId),
+            child: AspectRatio(
+              aspectRatio: 4 / 3,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: AppColors.insetFill,
+                  border: Border.all(color: c.withValues(alpha: 0.4)),
+                ),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (_loadingImage)
+                      Center(
+                          child: Text('LOADING FRAME...',
+                              style: AppText.monoCaption))
+                    else if (_image != null)
+                      Image.memory(_image!, fit: BoxFit.cover)
+                    else
+                      Center(
+                          child: Text('NO FRAME CACHED',
+                              style: AppText.monoCaption)),
+                    if (_image != null) ...[
+                      AnimatedBuilder(
+                        animation: _scan,
+                        builder: (_, __) => CustomPaint(
+                          painter: ScanlinePainter(t: _scan.value, color: c),
+                        ),
+                      ),
+                      CustomPaint(painter: CornerBracketsPainter(color: c)),
+                    ],
+                  ],
+                ),
               ),
-              child: _loadingImage
-                  ? Center(child: Text('LOADING FRAME...', style: AppText.monoCaption))
-                  : _image != null
-                      ? Image.memory(_image!, fit: BoxFit.cover)
-                      : Center(
-                          child: Text('NO FRAME CACHED', style: AppText.monoCaption)),
             ),
           ),
           const SizedBox(height: AppSpace.md),
