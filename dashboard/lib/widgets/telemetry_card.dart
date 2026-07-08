@@ -1,18 +1,27 @@
+import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../models/telemetry.dart';
+import '../providers/app_state.dart';
 import '../theme/app_theme.dart';
 import 'glass.dart';
+import 'painters.dart';
 
 /// Glass telemetry card: a single node's latest readings rendered as a rigid,
-/// data-dense panel — headline moisture metric, micro telemetry bars, and a
-/// two-column thermal/EC readout.
+/// data-dense panel. Soil nodes headline an animated ring gauge; camera nodes
+/// headline their latest frame with viewfinder brackets; unpaired/quiet nodes
+/// show a code-drawn node glyph instead of bare dashes.
 ///
-/// Animations:
-///   - Metric value text cross-fades when it changes.
-///   - On a fresh SSE delta (updateTick bump), the StatusChip flashes a brief
-///     border accent so the operator gets visual confirmation a value is live.
-///   - Stale nodes (>5 min since last contact) dim to 50% opacity and show a
+/// Animations (all drawn from [AppMotion]):
+///   - Staggered fade + slide entrance, once per mount, offset by grid index.
+///   - Moisture gauge sweeps in and tweens between values.
+///   - On a fresh SSE delta (updateTick bump) a brief sage border "data flash"
+///     + header pulse dot confirm the value is live.
+///   - Camera frames fade in with corner brackets; a disease hit adds edge glow.
+///   - Stale nodes (>5 min since last contact) dim to 55% opacity and show a
 ///     STALE status override instead of the moisture-based health label.
 class TelemetryCard extends StatefulWidget {
   final TelemetrySnapshot snapshot;
@@ -31,17 +40,37 @@ class TelemetryCard extends StatefulWidget {
 }
 
 class _TelemetryCardState extends State<TelemetryCard>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
+  // Rest at 1.0 → no glow; a fresh delta forwards from 0.0 so the glow flashes
+  // in and decays as the controller settles back at 1.0.
   late final AnimationController _pulse = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1200),
   );
+  late final AnimationController _entrance = AnimationController(
+    vsync: this,
+    duration: AppMotion.slow,
+  );
   int _lastTick = 0;
+
+  // Latest camera frame bytes, cached per detection so we only re-fetch when
+  // a new frame actually arrives (detectionAt advances).
+  Uint8List? _frame;
+  DateTime? _frameFor;
+  bool _fetching = false;
 
   @override
   void initState() {
     super.initState();
     _lastTick = widget.snapshot.updateTick;
+    _pulse.value = 1.0;
+    // Staggered entrance: later cards in the grid animate in slightly after the
+    // first. Capped so a large grid doesn't cascade for seconds.
+    final delayMs = (widget.index.clamp(1, 12) - 1) * 55;
+    Future.delayed(Duration(milliseconds: delayMs), () {
+      if (mounted) _entrance.forward();
+    });
+    _maybeFetchFrame();
   }
 
   @override
@@ -53,19 +82,43 @@ class _TelemetryCardState extends State<TelemetryCard>
       _lastTick = widget.snapshot.updateTick;
       _pulse.forward(from: 0.0);
     }
+    _maybeFetchFrame();
+  }
+
+  /// Fetch the camera frame once, and again whenever the detection timestamp
+  /// advances. No-op for non-camera nodes and while a fetch is in flight.
+  void _maybeFetchFrame() {
+    final snap = widget.snapshot;
+    if (!snap.isCamera || _fetching) return;
+    final at = snap.detectionAt;
+    if (_frame != null && _frameFor == at) return;
+    final api = context.read<AppState>().api;
+    if (api == null) return;
+    _fetching = true;
+    _frameFor = at;
+    api.fetchCameraFrame(snap.nodeId).then((bytes) {
+      if (!mounted) {
+        _fetching = false;
+        return;
+      }
+      setState(() {
+        if (bytes != null) _frame = bytes;
+        _fetching = false;
+      });
+    });
   }
 
   @override
   void dispose() {
     _pulse.dispose();
+    _entrance.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final snapshot = widget.snapshot;
-    final moisture = snapshot.moisture;
-    final state = _moistureState(moisture);
+    final state = _moistureState(snapshot.moisture);
     final ordinal = widget.index.toString().padLeft(2, '0');
     final stale = snapshot.isStale;
     final isCamera = snapshot.isCamera;
@@ -92,15 +145,26 @@ class _TelemetryCardState extends State<TelemetryCard>
       headerLabel = null;
     }
 
+    Widget body;
+    if (isCamera) {
+      body = _CameraBody(snapshot: snapshot, frame: _frame);
+    } else if (!snapshot.hasReadings) {
+      body = _PlaceholderBody(
+        glyph: snapshot.hasActuator ? NodeGlyph.controller : NodeGlyph.soil,
+      );
+    } else {
+      body = _SoilBody(snapshot: snapshot, state: state);
+    }
+
     final card = Opacity(
       // Stale cards fade back so the eye is drawn to live ones first.
       opacity: stale ? 0.55 : 1.0,
       child: AnimatedBuilder(
         animation: _pulse,
         builder: (context, child) {
-          // Pulse: brief sage glow that decays. We layer a second DecoratedBox
-          // around the glass card during the animation rather than recreating
-          // the glass itself.
+          // Pulse: brief sage glow that decays. We layer a DecoratedBox around
+          // the glass card during the animation rather than recreating the
+          // glass itself.
           final t = 1.0 - _pulse.value;
           return DecoratedBox(
             decoration: BoxDecoration(
@@ -145,14 +209,12 @@ class _TelemetryCardState extends State<TelemetryCard>
                     _DiagBadge(reason: snapshot.resetReason!),
                     const SizedBox(width: AppSpace.sm),
                   ],
+                  _PulseDot(pulse: _pulse),
                   StatusChip(state: headerState, labelOverride: headerLabel),
                 ],
               ),
               const SizedBox(height: AppSpace.md),
-              if (isCamera)
-                _CameraBody(snapshot: snapshot)
-              else
-                _SoilBody(snapshot: snapshot, state: state),
+              body,
               const SizedBox(height: AppSpace.sm),
               _LastSeenLine(ageSeconds: snapshot.ageSeconds),
             ],
@@ -161,17 +223,28 @@ class _TelemetryCardState extends State<TelemetryCard>
       ),
     );
 
-    if (widget.onTap == null) return card;
+    // Entrance: fade + a short upward slide, driven once on mount.
+    final entered = FadeTransition(
+      opacity: _entrance.drive(CurveTween(curve: AppMotion.curve)),
+      child: SlideTransition(
+        position: _entrance.drive(
+          Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero)
+              .chain(CurveTween(curve: AppMotion.curve)),
+        ),
+        child: card,
+      ),
+    );
+
+    if (widget.onTap == null) return entered;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
-        child: card,
+        child: entered,
       ),
     );
   }
-
 }
 
 // ── shared formatting helpers ────────────────────────────────────────────────
@@ -192,7 +265,72 @@ Color _batteryColor(double? b) {
   return AppColors.alert;
 }
 
-/// Soil-node card body: moisture headline, soil/battery bars, temp + EC readout.
+/// Header pulse dot: a sharp 6px square that flashes on a fresh delta and is
+/// invisible at rest. Shares the [_pulse] controller with the border flash.
+class _PulseDot extends StatelessWidget {
+  final Animation<double> pulse;
+  const _PulseDot({required this.pulse});
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: pulse,
+      builder: (_, __) {
+        final t = 1.0 - pulse.value;
+        if (t < 0.01) return const SizedBox(width: 0, height: 0);
+        return Padding(
+          padding: const EdgeInsets.only(right: AppSpace.sm, top: 3),
+          child: Opacity(
+            opacity: t,
+            child: Container(width: 6, height: 6, color: AppColors.health),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Animated arc gauge headlining a soil card's moisture. Sweeps in on mount and
+/// tweens between values; the centre reads the live figure.
+class _MoistureGauge extends StatelessWidget {
+  final double? moisture;
+  final Color color;
+  const _MoistureGauge({required this.moisture, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final target = (moisture ?? 0).clamp(0.0, 100.0).toDouble();
+    return SizedBox(
+      width: 104,
+      height: 104,
+      child: TweenAnimationBuilder<double>(
+        tween: Tween<double>(begin: 0, end: target),
+        duration: AppMotion.slow,
+        curve: AppMotion.emphasize,
+        builder: (context, v, _) {
+          return CustomPaint(
+            painter: RingGaugePainter(value: v, progress: 1, color: color),
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    moisture == null ? '--' : v.toStringAsFixed(0),
+                    style: AppText.metric.copyWith(fontSize: 30),
+                  ),
+                  Text('% VWC', style: AppText.monoCaption),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+/// Soil-node card body: moisture ring gauge + temp/EC readouts, battery bar,
+/// optional irrigation status.
 class _SoilBody extends StatelessWidget {
   final TelemetrySnapshot snapshot;
   final HealthState state;
@@ -200,53 +338,41 @@ class _SoilBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final moisture = snapshot.moisture;
     final battery = snapshot.batteryPct;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            _AnimatedMetric(value: moisture, style: AppText.metric),
-            const SizedBox(width: AppSpace.sm),
-            Text('% VWC', style: AppText.monoCaption),
+            _MoistureGauge(moisture: snapshot.moisture, color: state.color),
+            const SizedBox(width: AppSpace.lg),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _MiniReadout(
+                    label: 'Canopy Temp',
+                    value: snapshot.temperature,
+                    unit: '°C',
+                  ),
+                  const SizedBox(height: AppSpace.md),
+                  _MiniReadout(label: 'EC', value: snapshot.ec, unit: 'mS/cm'),
+                ],
+              ),
+            ),
           ],
         ),
         const TechnicalDivider(),
-        MicroBar(
-          label: 'Soil Moisture',
-          valueText: '${_fmt(moisture)}%',
-          ratio: (moisture ?? 0) / 100.0,
-          color: state.color,
-        ),
-        const SizedBox(height: AppSpace.md),
         MicroBar(
           label: 'Battery Reserve',
           valueText: '${_fmt(battery)}%',
           ratio: (battery ?? 0) / 100.0,
           color: _batteryColor(battery),
         ),
-        const TechnicalDivider(),
-        Row(
-          children: [
-            Expanded(
-              child: _MiniReadout(
-                label: 'Canopy Temp',
-                value: snapshot.temperature,
-                unit: '°C',
-              ),
-            ),
-            const SizedBox(width: AppSpace.md),
-            Expanded(
-              child: _MiniReadout(label: 'EC', value: snapshot.ec, unit: 'mS/cm'),
-            ),
-          ],
-        ),
         if (snapshot.hasActuator) ...[
-          const SizedBox(height: AppSpace.sm),
+          const SizedBox(height: AppSpace.md),
           _IrrigationRow(snapshot: snapshot),
         ],
       ],
@@ -286,56 +412,158 @@ class _IrrigationRow extends StatelessWidget {
   }
 }
 
-/// Camera-node card body: latest disease detection as a headline + confidence.
+/// Camera-node card body: latest frame as the hero, dimmed under a scrim with
+/// animated viewfinder brackets, disease edge glow, and the detection headline.
 class _CameraBody extends StatelessWidget {
   final TelemetrySnapshot snapshot;
-  const _CameraBody({required this.snapshot});
+  final Uint8List? frame;
+  const _CameraBody({required this.snapshot, this.frame});
 
   @override
   Widget build(BuildContext context) {
-    if (!snapshot.hasDetection) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('AWAITING CAPTURE', style: AppText.monoCaption),
-          const SizedBox(height: AppSpace.sm),
-          Text('Upload a frame to run disease analysis.',
-              style: AppText.monoCaption.copyWith(fontSize: 10)),
-        ],
-      );
-    }
+    final hasDet = snapshot.hasDetection;
     final healthy = snapshot.detectionHealthy;
-    final c = healthy ? AppColors.health : AppColors.alert;
+    final c = !hasDet
+        ? AppColors.textSecondary
+        : (healthy ? AppColors.health : AppColors.alert);
+    final diseased = hasDet && !healthy;
     final conf = (snapshot.detectionConfidence ?? 0).clamp(0.0, 1.0);
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          snapshot.detectionShort,
-          style: AppText.title.copyWith(color: c, fontSize: 24),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+        AspectRatio(
+          aspectRatio: 16 / 10,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: AppColors.insetFill,
+              border: Border.all(color: c.withValues(alpha: 0.4)),
+              boxShadow: diseased
+                  ? [
+                      BoxShadow(
+                        color: AppColors.alert.withValues(alpha: 0.35),
+                        blurRadius: 14,
+                      ),
+                    ]
+                  : const [],
+            ),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (frame != null)
+                  Image.memory(frame!, fit: BoxFit.cover, gaplessPlayback: true)
+                else
+                  Center(
+                    child: SizedBox(
+                      width: 48,
+                      height: 48,
+                      child: CustomPaint(
+                        painter: NodeGlyphPainter(glyph: NodeGlyph.camera),
+                      ),
+                    ),
+                  ),
+                // Scrim so the overlaid label stays legible on any frame.
+                const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Color(0x00000000), Color(0xCC000000)],
+                    ),
+                  ),
+                ),
+                if (frame != null)
+                  TweenAnimationBuilder<double>(
+                    tween: Tween<double>(begin: 0, end: 1),
+                    duration: AppMotion.draw,
+                    curve: AppMotion.curve,
+                    builder: (_, r, __) => CustomPaint(
+                      painter: CornerBracketsPainter(color: c, reveal: r),
+                    ),
+                  ),
+                if (hasDet)
+                  Positioned(
+                    left: AppSpace.sm,
+                    right: AppSpace.sm,
+                    bottom: AppSpace.sm,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          snapshot.detectionShort,
+                          style: AppText.title.copyWith(color: c, fontSize: 20),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          snapshot.detectionIssue!.toUpperCase(),
+                          style: AppText.monoCaption,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Positioned(
+                    left: AppSpace.sm,
+                    bottom: AppSpace.sm,
+                    child: Text('AWAITING CAPTURE', style: AppText.monoCaption),
+                  ),
+              ],
+            ),
+          ),
         ),
-        const SizedBox(height: AppSpace.xs),
-        Text(
-          snapshot.detectionIssue!.toUpperCase(),
-          style: AppText.monoCaption,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        const TechnicalDivider(),
-        MicroBar(
-          label: 'Confidence',
-          valueText: '${(conf * 100).toStringAsFixed(0)}%',
-          ratio: conf,
-          color: c,
-        ),
+        if (hasDet) ...[
+          const SizedBox(height: AppSpace.md),
+          MicroBar(
+            label: 'Confidence',
+            valueText: '${(conf * 100).toStringAsFixed(0)}%',
+            ratio: conf,
+            color: c,
+          ),
+        ],
         const SizedBox(height: AppSpace.sm),
         Text(
           'TAP FOR IMAGE & TREATMENT',
           style: AppText.monoCaption.copyWith(fontSize: 9, letterSpacing: 1.2),
         ),
+      ],
+    );
+  }
+}
+
+/// Placeholder body for a paired node we have no readings from yet — shows the
+/// node-kind glyph instead of a column of dashes.
+class _PlaceholderBody extends StatelessWidget {
+  final NodeGlyph glyph;
+  const _PlaceholderBody({required this.glyph});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          height: 88,
+          child: Center(
+            child: SizedBox(
+              width: 72,
+              height: 72,
+              child: CustomPaint(
+                painter: NodeGlyphPainter(
+                  glyph: glyph,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: AppSpace.sm),
+        Center(child: Text('AWAITING TELEMETRY', style: AppText.monoCaption)),
       ],
     );
   }
@@ -414,8 +642,7 @@ class _DiagBadge extends StatelessWidget {
     return Tooltip(
       message: 'Last boot: $reason',
       child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
         decoration: BoxDecoration(
           color: AppColors.alert.withValues(alpha: 0.15),
           border: Border.all(color: AppColors.alert.withValues(alpha: 0.5)),
