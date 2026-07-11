@@ -362,13 +362,18 @@ class InferenceEngine:
 
     IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(1, 3, 1, 1)
     IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(1, 3, 1, 1)
-    INPUT_SIZE = (128, 128)
+    DEFAULT_INPUT_SIZE = (128, 128)
 
     def __init__(self, settings: Settings):
         self.model_path = settings.model_path
         self.labels = list(settings.class_labels)
         self.session = None
         self.provider = "none"
+        # Derived from the model's own input shape at load (see below) so a new
+        # export at a different resolution (e.g. the 224px field model) drops in
+        # with no code change. Falls back to the legacy 128 if the model uses a
+        # dynamic spatial axis.
+        self.input_size = self.DEFAULT_INPUT_SIZE
         if self.model_path.exists():
             try:
                 import onnxruntime as ort
@@ -394,8 +399,14 @@ class InferenceEngine:
                     providers=providers,
                 )
                 self.provider = self.session.get_providers()[0]
+                # Read spatial dims from the graph input [N, C, H, W]. Only adopt
+                # them when they are concrete ints (a dynamic axis is a str).
+                shape = self.session.get_inputs()[0].shape
+                if len(shape) == 4 and isinstance(shape[2], int) and isinstance(shape[3], int):
+                    self.input_size = (shape[3], shape[2])  # PIL wants (W, H)
                 logging.getLogger(__name__).info(
-                    "onnx_session_ready provider=%s", self.provider
+                    "onnx_session_ready provider=%s input_size=%s",
+                    self.provider, self.input_size,
                 )
             except Exception as exc:  # pragma: no cover - logged at startup
                 logging.getLogger(__name__).warning(
@@ -409,7 +420,7 @@ class InferenceEngine:
 
     def _preprocess(self, image_bytes: bytes) -> np.ndarray:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        img = img.resize(self.INPUT_SIZE)
+        img = img.resize(self.input_size)
         arr = np.array(img).astype(np.float32) / 255.0  # HWC, 0-1
         arr = np.transpose(arr, (2, 0, 1))  # CHW
         arr = np.expand_dims(arr, axis=0)  # NCHW

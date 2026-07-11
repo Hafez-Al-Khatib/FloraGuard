@@ -1,0 +1,15 @@
+# Training + export pipeline for the field-robust disease model.
+# Install into a dedicated venv (NOT the edge-server runtime venv):
+#   python -m venv ml/.venv && ml/.venv/Scripts/pip install -r ml/requirements.txt
+#
+# A CUDA GPU is strongly recommended for training. onnxruntime here is CPU —
+# it is only used for the export/quantization/eval step, which the Pi also runs.
+torch>=2.2
+torchvision>=0.17
+timm>=1.0.7          # MobileNetV3 / EfficientNet backbones + PDDD-compatible loading
+onnx>=1.16
+onnxruntime>=1.18    # static INT8 quantization + eval
+pillow>=10.0
+numpy>=1.26
+scikit-learn>=1.4    # macro-F1, confusion matrix, class weights
+tqdm>=4.66
