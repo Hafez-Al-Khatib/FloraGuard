@@ -89,7 +89,9 @@ sudo docker run --rm \
 # ── 5. TLS certificates ───────────────────────────────────────────────────────
 if [ ! -f "$EDGE_DIR/nginx/certs/server.crt" ]; then
     log "Generating self-signed TLS certs..."
-    ( cd "$EDGE_DIR/mosquitto/config" && bash gen-certs.sh "${PMS_HOSTNAME:-plant-hub.local}" )
+    # Pass PMS_HOST_IP=<pi-lan-ip> to add an IP SAN so phones that reach the Pi
+    # by IP (mDNS .local is unreliable on Android) still validate the cert.
+    ( cd "$EDGE_DIR/mosquitto/config" && bash gen-certs.sh "${PMS_HOSTNAME:-plant-hub.local}" "${PMS_HOST_IP:-}" )
 else
     log "TLS certs already present."
 fi

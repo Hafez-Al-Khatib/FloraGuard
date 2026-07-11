@@ -3,6 +3,9 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../models/telemetry.dart';
+// Platform-conditional: on mobile/desktop this trusts the hub's self-signed
+// cert (host-scoped); on web it returns a plain browser client.
+import 'hub_client_io.dart' if (dart.library.html) 'hub_client_web.dart';
 
 /// Outcome of validating the hub URL + token at login.
 enum AuthResult { ok, badToken, noHub }
@@ -12,6 +15,11 @@ enum AuthResult { ok, badToken, noHub }
 class ApiService {
   final String baseUrl;
   final String token;
+
+  /// One client for the whole service so the hub-trust override (mobile/
+  /// desktop) applies to every request, streams included. Scoped to the host
+  /// the operator entered at login.
+  late final http.Client _client = createHubClient(Uri.parse(baseUrl).host);
 
   ApiService({required this.baseUrl, required this.token});
 
@@ -27,7 +35,7 @@ class ApiService {
     String path, {
     Duration timeout = const Duration(seconds: 8),
   }) async {
-    final response = await http
+    final response = await _client
         .get(Uri.parse('$baseUrl/api/v1$path'), headers: _authHeaders())
         .timeout(timeout);
     if (response.statusCode != 200) {
@@ -47,8 +55,8 @@ class ApiService {
     final headers = _authHeaders(contentType: 'application/json');
     final encoded = body != null ? jsonEncode(body) : null;
     final response = await (method == 'PUT'
-            ? http.put(uri, headers: headers, body: encoded)
-            : http.post(uri, headers: headers, body: encoded))
+            ? _client.put(uri, headers: headers, body: encoded)
+            : _client.post(uri, headers: headers, body: encoded))
         .timeout(timeout);
     if (response.statusCode != 200 && response.statusCode != 201) {
       throw Exception(
@@ -61,7 +69,7 @@ class ApiService {
 
   Future<bool> healthCheck() async {
     try {
-      final response = await http
+      final response = await _client
           .get(Uri.parse('$baseUrl/api/v1/health'))
           .timeout(const Duration(seconds: 5));
       return response.statusCode == 200;
@@ -82,7 +90,7 @@ class ApiService {
     // wrong token would still "log in" (health passes) and then every data call
     // would 403 on the dashboard.
     try {
-      final response = await http
+      final response = await _client
           .get(Uri.parse('$baseUrl/api/v1/nodes'), headers: _authHeaders())
           .timeout(const Duration(seconds: 8));
       if (response.statusCode == 200) return AuthResult.ok;
@@ -130,7 +138,7 @@ class ApiService {
   /// null when no frame is cached.
   Future<Uint8List?> fetchCameraFrame(String nodeId) async {
     try {
-      final response = await http
+      final response = await _client
           .get(
             Uri.parse('$baseUrl/api/v1/node/$nodeId/frame'),
             headers: _authHeaders(),
@@ -146,7 +154,7 @@ class ApiService {
   /// Upload a JPEG frame for a node (raw binary body, image/jpeg), as the
   /// in-app camera capture does. Returns true on HTTP 200.
   Future<bool> uploadFrame(String nodeId, Uint8List jpegBytes) async {
-    final response = await http
+    final response = await _client
         .post(
           Uri.parse('$baseUrl/api/v1/node/$nodeId/upload-frame'),
           headers: _authHeaders(contentType: 'image/jpeg'),
@@ -230,7 +238,7 @@ class ApiService {
     request.headers.addAll(_authHeaders());
     request.headers['Accept'] = 'text/event-stream';
 
-    final response = await http.Client().send(request);
+    final response = await _client.send(request);
     if (response.statusCode != 200) {
       throw Exception('Telemetry stream failed: ${response.statusCode}');
     }
@@ -270,7 +278,7 @@ class ApiService {
     request.headers.addAll(_authHeaders());
     request.headers['Accept'] = 'text/event-stream';
 
-    final response = await http.Client().send(request);
+    final response = await _client.send(request);
     if (response.statusCode != 200) {
       throw Exception('Chat failed: ${response.statusCode}');
     }
