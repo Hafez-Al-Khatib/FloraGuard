@@ -20,15 +20,18 @@ def _make_jpeg(size: tuple[int, int] = (128, 128)) -> bytes:
 
 def test_preprocess_produces_nchw_float_tensor():
     engine = InferenceEngine(Settings())
+    # input_size is model-driven (W, H); the tensor is NCHW.
+    w, h = engine.input_size
     tensor = engine._preprocess(_make_jpeg())
-    assert tensor.shape == (1, 3, 128, 128)
+    assert tensor.shape == (1, 3, h, w)
     assert tensor.dtype == np.float32
 
 
 def test_preprocess_resizes_non_square_input():
     engine = InferenceEngine(Settings())
+    w, h = engine.input_size
     tensor = engine._preprocess(_make_jpeg(size=(640, 480)))
-    assert tensor.shape == (1, 3, 128, 128)
+    assert tensor.shape == (1, 3, h, w)
 
 
 def test_inference_fallback_when_model_missing(tmp_path):

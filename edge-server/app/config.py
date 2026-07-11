@@ -7,8 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 # Auto-load class labels from the exported PlantVillage label file if it exists.
-_DEFAULT_MODEL_PATH = Path("models/plantvillage_resnet18_15cls_int8.onnx")
-_DEFAULT_LABELS_PATH = _DEFAULT_MODEL_PATH.with_name("plantvillage_labels.json")
+_DEFAULT_MODEL_PATH = Path("models/field_mnv3_15cls.onnx")
+_DEFAULT_LABELS_PATH = _DEFAULT_MODEL_PATH.with_name("field_labels.json")
 _DEFAULT_LABELS = ["Healthy"]
 if _DEFAULT_LABELS_PATH.exists():
     import json as _json

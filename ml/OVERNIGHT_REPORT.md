@@ -45,8 +45,17 @@ real numbers and produce a field-trained model + honest metrics._
 |---|---|---|---|---|
 | ResNet18 (current, FP32) | PlantVillage (lab) | 24.0% | 0.154 | 0.13 |
 | ResNet18 (current, served INT8) | PlantVillage (lab) | 25.0% | 0.170 | 0.15 |
-| **MobileNetV3-L (new, FP32, 120ep)** ← best | PlantDoc (field) | **36.0%** | **0.367** | **0.44** |
-| **MobileNetV3-L (new, static INT8)** ← deployable | PlantDoc (field) | 34.0% | 0.329 | 0.37 |
+| MobileNetV3-L (CPU proof, 120ep) | PlantDoc (field) | 36.0% | 0.367 | 0.44 |
+| MobileNetV3-L CPU INT8 | PlantDoc (field) | 34.0% | 0.329 | 0.37 |
+| **MobileNetV3-L 15-class (Colab GPU, +PlantVillage)** ← DEPLOYED | PlantDoc+PV | **44.0%** | **0.411** | 0.47 |
+| MobileNetV3-L 15-class INT8 (Colab) | PlantDoc+PV | 42.0% | 0.403 | 0.49 |
+
+The Colab run (GPU, full PlantDoc + PlantVillage merged for all 15 classes, 200
+epochs) is the current best and is now the edge server's default model
+(`config.py` → `field_mnv3_15cls.onnx`, integration-tested through
+`InferenceEngine` with auto-224 input). Baseline → deployed = **24% → 44%
+accuracy, macro-F1 0.154 → 0.411 (2.7×)**. Its INT8 barely loses (0.403), so the
+4.7 MB quantized model is a viable Pi target too.
 
 Accuracy alone understates it: **macro-F1** (which punishes the collapse-to-a-few-
 classes behaviour by weighting every class equally) **more than doubled**. The new
