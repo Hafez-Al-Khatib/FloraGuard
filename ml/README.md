@@ -24,7 +24,15 @@ properly-quantized ONNX model that drops into the edge server.
   `quantize_dynamic`, which does ~nothing for a Conv net. Static quant with
   real-frame calibration is correct and is what `export_onnx.py` does.
 
-## Steps
+## Train on GPU (Colab) — recommended
+CPU training is data/epoch-limited. `ml/colab_train.ipynb` runs this exact
+pipeline on a free Colab T4: full PlantDoc (Linux checks out every file),
+optional PlantVillage merge for all 15 classes + more data, 200 epochs, then
+export + field eval + download. Open it in Colab, set `REPO_URL`, Runtime → GPU,
+Run all. Helper: `ml/add_plantvillage.py` merges PlantVillage into the field
+split under the exact label names (TreatmentDB-compatible).
+
+## Steps (local CPU)
 
 ```bash
 # 0. Environment (separate from the edge-server venv)
