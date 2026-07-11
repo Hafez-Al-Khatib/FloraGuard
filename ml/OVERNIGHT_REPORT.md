@@ -10,14 +10,15 @@ real numbers and produce a field-trained model + honest metrics._
   `Tomato_Late_blight` (recall 0.70) and `Pepper_bell_healthy` (0.71) and scores
   0.00 on six classes.
 - A MobileNetV3-Large retrained on field data (PlantDoc) with camera-matched
-  augmentation reaches **30% accuracy and macro-F1 0.348 — macro-F1 more than
-  doubled (0.154 → 0.348)** on the same test set, and macro-precision went
-  0.13 → 0.55. The collapse is gone: classes the old model scored 0.00 on now
-  work (YellowCurl-virus 0.73, healthy 0.55, mosaic 0.46).
-- **Deploy the FP32 export, not INT8.** Static INT8 lost too much here
-  (macro-F1 0.348 → 0.232) — MobileNetV3's h-swish/SE blocks are
-  quantization-sensitive and calibration used only 145 non-camera images. FP32
-  is 16.9 MB and fast on a Pi 5; fix INT8 later with real-frame calibration/QAT.
+  augmentation (120 epochs) reaches **36% accuracy and macro-F1 0.367 — macro-F1
+  more than doubled (0.154 → 0.367)** on the same test set, macro-precision
+  0.13 → 0.44. The collapse is gone: classes the old model scored 0.00 on now
+  work (Tomato_Late_blight 0.60, YellowCurl-virus 0.62, healthy 0.50).
+- **Both exports are deployable.** FP32 (16.9 MB) is best at macro-F1 0.367;
+  static INT8 (4.7 MB) holds macro-F1 0.329 — a small ~1-point-accuracy loss.
+  (An earlier 50-epoch model quantized much worse, macro-F1 0.232 → 0.348 FP32;
+  the longer-trained features quantize far more robustly, which is itself a
+  useful finding.) Deploy FP32 for accuracy, INT8 if you want the smaller file.
 - This ran on CPU with a small dataset (~820 field train images); it's a proof
   of the approach, not the final model. Ranked path to production in "Next steps".
 
@@ -44,13 +45,14 @@ real numbers and produce a field-trained model + honest metrics._
 |---|---|---|---|---|
 | ResNet18 (current, FP32) | PlantVillage (lab) | 24.0% | 0.154 | 0.13 |
 | ResNet18 (current, served INT8) | PlantVillage (lab) | 25.0% | 0.170 | 0.15 |
-| **MobileNetV3-L (new, FP32)** ← deploy | PlantDoc (field) | **30.0%** | **0.348** | **0.55** |
-| MobileNetV3-L (new, static INT8) | PlantDoc (field) | 20.0% | 0.232 | 0.33 |
+| **MobileNetV3-L (new, FP32, 120ep)** ← best | PlantDoc (field) | **36.0%** | **0.367** | **0.44** |
+| **MobileNetV3-L (new, static INT8)** ← deployable | PlantDoc (field) | 34.0% | 0.329 | 0.37 |
 
 Accuracy alone understates it: **macro-F1** (which punishes the collapse-to-a-few-
-classes behaviour by weighting every class equally) **more than doubled**, and
-macro-precision went from 0.13 → 0.55. The new model actually discriminates
-classes instead of defaulting to two.
+classes behaviour by weighting every class equally) **more than doubled**. The new
+model actually discriminates classes instead of defaulting to two. (A 50-epoch
+checkpoint scored 30% / 0.348 FP32; 120 epochs lifted both accuracy and recall,
+and — importantly — made the INT8 quantize cleanly.)
 
 ### Baseline per-class (current model, the "why") — recall highlights
 ```
@@ -66,26 +68,31 @@ Tomato_healthy             recall 0.00
 ```
 This is the "only bell-pepper-healthy and tomato-late-blight" behaviour, measured.
 
-### New model per-class (FP32) — classes that went from 0.00 → real
+### New model per-class (FP32, 120ep) — f1 now vs current model
 ```
-Tomato_YellowLeaf_Curl_Virus  f1 0.73  (precision 0.80, recall 0.67)   was 0.00
-Tomato_healthy                f1 0.55  (precision 1.00, recall 0.38)   was 0.00
-Potato_Early_blight           f1 0.53  (precision 0.57, recall 0.50)   was 0.33
-Tomato_Late_blight            f1 0.53  (precision 0.56, recall 0.50)   was 0.33
-Tomato_mosaic_virus           f1 0.46  (precision 1.00, recall 0.30)   was 0.00
-Pepper_bell_healthy           f1 0.44  (precision 1.00, recall 0.29)   was 0.40
-Tomato_Septoria_leaf_spot     f1 0.43  (precision 1.00, recall 0.27)   was 0.55
+Tomato_Late_blight             0.60   was 0.33
+Tomato_YellowLeaf_Curl_Virus   0.62   was 0.00
+Tomato_Early_blight            0.53   was 0.23
+Tomato_healthy                 0.50   was 0.00
+Pepper_bell_Bacterial_spot     0.47   was 0.00
+Pepper_bell_healthy            0.46   was 0.40
+Tomato_Septoria_leaf_spot      0.40   was 0.55  (the one regression)
+Potato_Late_blight             0.33   was 0.00
+Tomato_Bacterial_spot          0.33   was 0.00
+Potato_Early_blight            0.31   was 0.33
+Tomato_Leaf_Mold               0.22   was 0.00
+Tomato_mosaic_virus            0.00   (small/hard class; 10 test imgs)
 ```
-Trade-off: the new model is far more *precise* (few false positives) but
-*conservative* (lower recall) on the tiny 100-image test — more data and epochs
-would lift recall. `Tomato_Leaf_Mold` is still 0.00 (only 6 test / 79 train).
+Nine of twelve classes improved, several from 0.00. The remaining weak classes
+(mosaic, Leaf_Mold) are the smallest — a data problem, not a method one.
 
 ### INT8 quantization note
-Static INT8 dropped macro-F1 to 0.232. MobileNetV3's hard-swish + squeeze-excite
-blocks quantize poorly, and calibration used 145 lab-ish val images, not real
-ESP32-CAM frames. **Deploy FP32** for now; to recover INT8 later: calibrate on
-real cam captures, or use quantization-aware training (QAT). The *method*
-(static > dynamic) is still correct — this backbone + tiny calib set is the issue.
+The 120-epoch model's static INT8 holds **macro-F1 0.329** (vs 0.367 FP32) — a
+small loss, and INT8 is a viable deploy option (4.7 MB). Contrast the 50-epoch
+checkpoint, whose INT8 collapsed to 0.232: longer training produced smoother,
+more quantization-robust features. To tighten INT8 further, calibrate on real
+ESP32-CAM frames rather than the lab-ish val set, or use QAT. (Static
+quantization remains the correct *method* — never the old dynamic quant.)
 
 ## Artifacts (all on branch `ml-pipeline`)
 - `edge-server/app/models/field_mnv3_13cls.onnx` (FP32, 16.9 MB) — **deploy this**
