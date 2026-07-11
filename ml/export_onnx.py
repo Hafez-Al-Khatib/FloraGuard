@@ -65,6 +65,7 @@ def export_fp32(ckpt: dict, path: Path) -> None:
         model, dummy, str(path), export_params=True, opset_version=13,
         do_constant_folding=True, input_names=["input"], output_names=["output"],
         dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}},
+        dynamo=False,
     )
     print(f"FP32 -> {path} ({path.stat().st_size / 1e6:.2f} MB)")
 

@@ -82,6 +82,8 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--weight-decay", type=float, default=0.05)
+    ap.add_argument("--workers", type=int, default=4,
+                    help="DataLoader workers; use 0 on Windows if spawn stalls")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
 
@@ -100,8 +102,8 @@ def main() -> int:
     weights = torch.tensor((counts.sum() / (n * np.maximum(counts, 1))), dtype=torch.float32)
     criterion = nn.CrossEntropyLoss(weight=weights.to(device), label_smoothing=0.1)
 
-    train_ld = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=4, pin_memory=True)
-    val_ld = DataLoader(val_ds, batch_size=args.batch, shuffle=False, num_workers=4, pin_memory=True)
+    train_ld = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=args.workers, pin_memory=True)
+    val_ld = DataLoader(val_ds, batch_size=args.batch, shuffle=False, num_workers=args.workers, pin_memory=True)
 
     model = timm.create_model(args.backbone, pretrained=args.pretrained_ckpt is None, num_classes=n)
     if args.pretrained_ckpt:
