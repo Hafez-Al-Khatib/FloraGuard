@@ -121,6 +121,25 @@ lacked — Potato-healthy, Target-Spot, Spider-mites — so `class_labels` must 
 the 13). `TreatmentDB` keys already cover these labels. Then `classify.py` a real
 leaf and compare against the old model.
 
+## Coarse grouping — the real accuracy win (deployed)
+Fine 15-way is the wrong target: most errors are *within-crop* confusions
+(potato early↔late blight, tomato bacterial↔septoria↔target-spot) that don't
+change the response, and the crop is already known from which node the frame
+came from. Collapsing the 15 classes into **5 actionable groups**
+(healthy / blight / leaf_spot / viral / pest) via summed group softmax — **no
+retraining** — jumps the same deployed model to:
+
+| Diagnosis granularity | Accuracy | Macro-F1 |
+|---|---|---|
+| Fine (15-way) | 44% | 0.411 |
+| **Coarse (5 groups)** | **75%** | **0.739** |
+
+The edge server now reports the group as the diagnosis (`services.COARSE_GROUPS`,
+`InferenceEngine.predict_grouped`, group-level `TreatmentDB`). E.g. a potato
+leaf the fine model mislabels "Late blight" is still a correct **"Blight"** group
+call with treatment attached. `ml/coarsen.py` also builds grouped datasets for a
+future group-native retrain (should beat 75%).
+
 ## Honest caveats
 - **Small data:** ~820 field training images across 12 classes, CPU-trained. Real
   ceiling for this task is ~74–78% even for SOTA with good data — don't expect

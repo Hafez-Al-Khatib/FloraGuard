@@ -51,6 +51,22 @@ def test_inference_real_model_returns_valid_label():
     assert 0.0 <= confidence <= 1.0
 
 
+def test_predict_grouped_returns_group_and_fine():
+    from services import COARSE_GROUPS
+
+    settings = Settings()
+    engine = InferenceEngine(settings)
+    if engine.session is None:
+        pytest.skip("ONNX model file not available in this environment")
+    group, gconf, fine, fconf = engine.predict_grouped(_make_jpeg())
+    assert group in COARSE_GROUPS
+    assert fine in settings.class_labels
+    assert 0.0 <= gconf <= 1.0
+    # The group's summed softmax includes the argmax fine class, so it can only
+    # be >= that fine class's probability.
+    assert gconf >= fconf - 1e-6
+
+
 # ---------- TreatmentDB ----------
 
 def test_treatment_lookup_known_disease():

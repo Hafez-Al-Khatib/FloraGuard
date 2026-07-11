@@ -25,6 +25,7 @@ from services import (
     AgronomistChat,
     Cache,
     ControlEngine,
+    GROUP_DISPLAY,
     InferenceEngine,
     MqttPublisher,
     TimeSeriesDB,
@@ -181,10 +182,12 @@ async def receive_camera_frame(
         inference = get_inference(request)
         # to_thread: ONNX inference is CPU-bound; running it inline froze the
         # event loop (SSE, telemetry ingest, both engines) for every upload.
-        label, confidence = await asyncio.to_thread(inference.predict, data)
-        await _record_detection(cache, node_id, label, confidence)
+        group, gconf, fine, fconf = await asyncio.to_thread(
+            inference.predict_grouped, data
+        )
+        await _record_detection(cache, node_id, group, gconf, fine, fconf)
         await logger.ainfo(
-            "camera_frame_analyzed", node_id=node_id, issue=label, confidence=confidence
+            "camera_frame_analyzed", node_id=node_id, issue=group, confidence=gconf
         )
     except Exception as exc:
         await logger.aerror("auto_analyze_failed", node_id=node_id, error=str(exc))
@@ -202,34 +205,47 @@ def _is_valid_image(data: bytes) -> bool:
 
 
 async def _record_detection(
-    cache: Cache, node_id: str, label: str, confidence: float
+    cache: Cache,
+    node_id: str,
+    group: str,
+    confidence: float,
+    fine: str = "",
+    fine_confidence: float = 0.0,
 ) -> str:
     """Persist a disease detection and surface it: cache the diagnosis, pair the
     camera node, push it to the live SSE feed, and log a safety suggestion for a
     high-confidence disease. Returns the detection timestamp.
 
-    Shared by GET /analyze (operator-triggered) and the auto-analyze on
-    POST /upload-frame (autonomous ESP32-CAM / in-app capture).
+    The diagnosis is the coarse GROUP (accurate in the field); the fine label is
+    kept as detail. Shared by GET /analyze and the auto-analyze on /upload-frame.
     """
     detected_at = utc_now_iso()
-    await cache.set_camera_diagnostics(
-        node_id, {"issue": label, "confidence": confidence, "timestamp": detected_at}
-    )
+    issue = GROUP_DISPLAY.get(group, group)
+    record = {
+        "issue": issue,
+        "confidence": confidence,
+        "group": group,
+        "fine": fine,
+        "fine_confidence": fine_confidence,
+        "timestamp": detected_at,
+    }
+    await cache.set_camera_diagnostics(node_id, record)
     # Write-once: a detection on a node that also reports soil telemetry must
     # not flip its profile to "camera" (that hides its irrigation controls).
     await cache.note_node_seen(node_id, default_profile={"kind": "camera"})
     await cache.emit_event(
         "detection",
         node_id,
-        {"issue": label, "confidence": confidence, "at": detected_at},
+        {"issue": issue, "confidence": confidence, "group": group, "at": detected_at},
     )
     # Safety-first automation: log a suggestion, never actuate without confirmation.
-    if label not in TreatmentDB.healthy_labels() and confidence > 0.75:
+    # Group confidence is the summed softmax over the group, so 0.70 is meaningful.
+    if not TreatmentDB.is_healthy_group(group) and confidence > 0.70:
         await cache.log_automation_decision(
             node_id=node_id,
             decision="SUGGESTION",
             context={
-                "issue": label,
+                "issue": issue,
                 "confidence": confidence,
                 "message": "High-confidence anomaly detected. Awaiting operator confirmation.",
             },
@@ -260,7 +276,9 @@ async def evaluate_crop_health(
 
     t0 = time.perf_counter()
     try:
-        label, confidence = await asyncio.to_thread(inference.predict, img_bytes)
+        group, gconf, fine, fconf = await asyncio.to_thread(
+            inference.predict_grouped, img_bytes
+        )
     except Exception as exc:
         await logger.aerror("inference_failed", node_id=node_id, error=str(exc))
         raise HTTPException(
@@ -269,13 +287,13 @@ async def evaluate_crop_health(
         ) from exc
     inference_ms = round((time.perf_counter() - t0) * 1000, 2)
 
-    diagnostic = DiagnosticResult(issue=label, confidence=confidence)
+    diagnostic = DiagnosticResult(issue=GROUP_DISPLAY.get(group, group), confidence=gconf)
     # Cache, pair, push to SSE, and log a safety suggestion (shared with the
     # auto-analyze on /upload-frame).
-    await _record_detection(cache, node_id, label, confidence)
+    await _record_detection(cache, node_id, group, gconf, fine, fconf)
 
-    # Attach treatment recommendations when a known disease is detected.
-    treatments = TreatmentDB.treatments_for(label)
+    # Treatment recommendations for the diagnosed group (None when healthy).
+    treatments = TreatmentDB.treatments_for_group(group)
 
     return CameraAnalysisResponse(
         node_id=node_id,
@@ -318,8 +336,10 @@ async def latest_diagnostics(
     NodeIdPath(node_id=node_id)
     diag = await cache.get_camera_diagnostics(node_id)
     issue = diag.get("issue", "None")
-    healthy = issue in TreatmentDB.healthy_labels() or issue in ("None", "healthy")
-    treatments = TreatmentDB.treatments_for(issue)
+    group = diag.get("group", "")
+    # No group cached yet (no detection) → treat as healthy/none.
+    healthy = not group or TreatmentDB.is_healthy_group(group)
+    treatments = TreatmentDB.treatments_for_group(group) if group else None
     return {
         "node_id": node_id,
         "issue": issue,
@@ -327,6 +347,7 @@ async def latest_diagnostics(
         "timestamp": diag.get("timestamp"),
         "healthy": healthy,
         "treatments": treatments,
+        "fine": diag.get("fine", ""),
     }
 
 

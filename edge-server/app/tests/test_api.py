@@ -67,15 +67,19 @@ async def test_analyze_returns_diagnosis_and_treatments(client: AsyncClient):
         def predict(self, image_bytes):  # noqa: ARG002
             return ("Tomato_Late_blight", 0.91)
 
+        def predict_grouped(self, image_bytes):  # noqa: ARG002
+            return ("blight", 0.91, "Tomato_Late_blight", 0.91)
+
     app.dependency_overrides[get_inference] = lambda: StubInference()
 
     response = await client.get("/api/v1/node/cam-01/analyze", headers=AUTH)
     assert response.status_code == 200
     body = response.json()
-    assert body["anomalies"]["issue"] == "Tomato_Late_blight"
-    assert body["treatments"], "expected treatment recommendations for a known disease"
+    # Diagnosis is the accurate coarse group, not the fine label.
+    assert body["anomalies"]["issue"] == "Blight"
+    assert body["treatments"], "expected treatment recommendations for a diseased group"
     assert any(t["type"] == "chemical" for t in body["treatments"])
-    # confidence 0.91 > 0.75 threshold -> automation suggestion logged, not actuated
+    # group confidence 0.91 > 0.70 threshold -> automation suggestion logged, not actuated
     mock_cache.log_automation_decision.assert_awaited_once()
 
 
@@ -90,6 +94,9 @@ async def test_analyze_healthy_attaches_no_treatments(client: AsyncClient):
     class StubInference:
         def predict(self, image_bytes):  # noqa: ARG002
             return ("Tomato_healthy", 0.97)
+
+        def predict_grouped(self, image_bytes):  # noqa: ARG002
+            return ("healthy", 0.97, "Tomato_healthy", 0.97)
 
     app.dependency_overrides[get_inference] = lambda: StubInference()
 
@@ -342,14 +349,14 @@ async def test_latest_telemetry_includes_detection(client: AsyncClient):
 async def test_diagnostics_endpoint_returns_treatments(client: AsyncClient):
     mock_cache = AsyncMock()
     mock_cache.get_camera_diagnostics = AsyncMock(
-        return_value={"issue": "Tomato_Late_blight", "confidence": 0.91}
+        return_value={"issue": "Blight", "confidence": 0.91, "group": "blight"}
     )
     app.dependency_overrides[get_cache] = lambda: mock_cache
 
     response = await client.get("/api/v1/node/cam-01/diagnostics", headers=AUTH)
     assert response.status_code == 200
     body = response.json()
-    assert body["issue"] == "Tomato_Late_blight"
+    assert body["issue"] == "Blight"
     assert body["healthy"] is False
     assert body["treatments"]
     assert any(t["type"] == "chemical" for t in body["treatments"])
@@ -359,7 +366,7 @@ async def test_diagnostics_endpoint_returns_treatments(client: AsyncClient):
 async def test_diagnostics_endpoint_healthy_has_no_treatments(client: AsyncClient):
     mock_cache = AsyncMock()
     mock_cache.get_camera_diagnostics = AsyncMock(
-        return_value={"issue": "Tomato_healthy", "confidence": 0.98}
+        return_value={"issue": "Healthy", "confidence": 0.98, "group": "healthy"}
     )
     app.dependency_overrides[get_cache] = lambda: mock_cache
 
@@ -523,6 +530,9 @@ async def test_upload_frame_auto_analyzes(client: AsyncClient):
     class StubInference:
         def predict(self, image_bytes):  # noqa: ARG002
             return ("Tomato_Late_blight", 0.88)
+
+        def predict_grouped(self, image_bytes):  # noqa: ARG002
+            return ("blight", 0.88, "Tomato_Late_blight", 0.88)
 
     app.state.inference = StubInference()
 
