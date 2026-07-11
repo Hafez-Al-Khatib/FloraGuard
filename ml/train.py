@@ -82,6 +82,9 @@ def main() -> int:
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--weight-decay", type=float, default=0.05)
+    ap.add_argument("--label-smoothing", type=float, default=0.1)
+    ap.add_argument("--drop-rate", type=float, default=0.0,
+                    help="classifier dropout (timm drop_rate) — regularization for small data")
     ap.add_argument("--workers", type=int, default=4,
                     help="DataLoader workers; use 0 on Windows if spawn stalls")
     ap.add_argument("--out", type=Path, required=True)
@@ -100,12 +103,15 @@ def main() -> int:
     # Class-weighted loss: field datasets (PlantDoc) are imbalanced.
     counts = np.bincount([y for _, y in train_ds.samples], minlength=n).astype(np.float32)
     weights = torch.tensor((counts.sum() / (n * np.maximum(counts, 1))), dtype=torch.float32)
-    criterion = nn.CrossEntropyLoss(weight=weights.to(device), label_smoothing=0.1)
+    criterion = nn.CrossEntropyLoss(weight=weights.to(device), label_smoothing=args.label_smoothing)
 
     train_ld = DataLoader(train_ds, batch_size=args.batch, shuffle=True, num_workers=args.workers, pin_memory=True)
     val_ld = DataLoader(val_ds, batch_size=args.batch, shuffle=False, num_workers=args.workers, pin_memory=True)
 
-    model = timm.create_model(args.backbone, pretrained=args.pretrained_ckpt is None, num_classes=n)
+    model = timm.create_model(
+        args.backbone, pretrained=args.pretrained_ckpt is None,
+        num_classes=n, drop_rate=args.drop_rate,
+    )
     if args.pretrained_ckpt:
         load_pretrained_backbone(model, args.pretrained_ckpt)
     model.to(device)

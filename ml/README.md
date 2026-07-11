@@ -32,6 +32,17 @@ export + field eval + download. Open it in Colab, set `REPO_URL`, Runtime → GP
 Run all. Helper: `ml/add_plantvillage.py` merges PlantVillage into the field
 split under the exact label names (TreatmentDB-compatible).
 
+## Tuning & quantization
+- **`ml/sweep.py`** — Optuna search over backbone / resolution / lr / weight-decay
+  / label-smoothing / dropout, optimizing validation macro-F1; prints the winning
+  `train.py` command. Model quality (not quantization) is the accuracy ceiling, so
+  this is the highest-value knob. Sweep on a coarse dataset to tune the deployed
+  5-group metric directly.
+- **`ml/export_onnx.py --quant {static,dynamic,fp16,none}`** (+ `--exclude-nodes`
+  for mixed precision). On the deployed coarse metric, static INT8 costs ~1 pt for
+  3.6× smaller — already Pi-ready. On a Pi 5, FP32 is also fast; INT8 mainly saves
+  size/memory.
+
 ## Steps (local CPU)
 
 ```bash

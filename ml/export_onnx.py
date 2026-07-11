@@ -85,6 +85,18 @@ def main() -> int:
                     help="real cam frames / field val images for INT8 calibration")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--calib-limit", type=int, default=300)
+    ap.add_argument(
+        "--quant", default="static",
+        choices=["static", "dynamic", "fp16", "none"],
+        help="static=calibrated INT8 (smallest, tiny loss); dynamic=weights-only "
+             "INT8 (no calib, weak for CNNs); fp16=half precision (near-lossless, "
+             "half size, limited CPU speedup); none=FP32 only",
+    )
+    ap.add_argument(
+        "--exclude-nodes", nargs="*", default=None,
+        help="static only: node names to keep in FP32 (mixed precision) — use for "
+             "quantization-sensitive layers if static INT8 costs too much accuracy",
+    )
     args = ap.parse_args()
 
     ckpt = torch.load(args.ckpt, map_location="cpu", weights_only=False)
@@ -94,23 +106,38 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
 
     fp32 = args.out / f"field_mnv3_{n}cls.onnx"
-    int8 = args.out / f"field_mnv3_{n}cls_int8.onnx"
-
     export_fp32(ckpt, fp32)
     smoke(fp32, labels, img_size)
 
-    reader = FolderCalibrationReader(args.calib_dir, "input", img_size, args.calib_limit)
-    quantize_static(
-        model_input=str(fp32),
-        model_output=str(int8),
-        calibration_data_reader=reader,
-        quant_format=ort.quantization.QuantFormat.QDQ,
-        activation_type=QuantType.QUInt8,
-        weight_type=QuantType.QInt8,
-        per_channel=True,
-    )
-    print(f"INT8 (static) -> {int8} ({int8.stat().st_size / 1e6:.2f} MB)")
-    smoke(int8, labels, img_size)
+    if args.quant == "static":
+        out = args.out / f"field_mnv3_{n}cls_int8.onnx"
+        reader = FolderCalibrationReader(args.calib_dir, "input", img_size, args.calib_limit)
+        quantize_static(
+            model_input=str(fp32), model_output=str(out),
+            calibration_data_reader=reader,
+            quant_format=ort.quantization.QuantFormat.QDQ,
+            activation_type=QuantType.QUInt8, weight_type=QuantType.QInt8,
+            per_channel=True, nodes_to_exclude=args.exclude_nodes or [],
+        )
+        kind = "INT8 static" + (" (mixed)" if args.exclude_nodes else "")
+    elif args.quant == "dynamic":
+        from onnxruntime.quantization import quantize_dynamic
+        out = args.out / f"field_mnv3_{n}cls_int8dyn.onnx"
+        quantize_dynamic(model_input=str(fp32), model_output=str(out), weight_type=QuantType.QInt8)
+        kind = "INT8 dynamic"
+    elif args.quant == "fp16":
+        import onnx
+        from onnxconverter_common import float16
+        out = args.out / f"field_mnv3_{n}cls_fp16.onnx"
+        # keep_io_types: inputs/outputs stay FP32 so the server preprocessing is unchanged.
+        onnx.save(float16.convert_float_to_float16(onnx.load(str(fp32)), keep_io_types=True), str(out))
+        kind = "FP16"
+    else:  # none
+        out = None
+
+    if out is not None:
+        print(f"{kind} -> {out} ({out.stat().st_size / 1e6:.2f} MB)")
+        smoke(out, labels, img_size)
 
     (args.out / "field_labels.json").write_text(json.dumps(labels, indent=2))
     print(f"labels -> {args.out / 'field_labels.json'}")
