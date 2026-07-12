@@ -85,9 +85,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   void _openNodeDetail(String nodeId) {
     final snapshot = _telemetry[nodeId];
     if (snapshot == null) return;
+    final linked = linkedPeer(_telemetry.values, snapshot,
+        wantSoil: snapshot.isCamera);
     Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => NodeDetailScreen(nodeId: nodeId, initial: snapshot),
+        builder: (_) =>
+            NodeDetailScreen(nodeId: nodeId, initial: snapshot, linked: linked),
       ),
     );
   }
@@ -662,6 +665,9 @@ class _TelemetryGrid extends StatelessWidget {
                   child: TelemetryCard(
                     key: ValueKey('card-${cards[i].nodeId}'),
                     snapshot: cards[i],
+                    // Zone sibling: soil readings for a camera, vision for soil.
+                    linked: linkedPeer(cards, cards[i],
+                        wantSoil: cards[i].isCamera),
                     index: i + 1,
                     onTap: () => onTap(cards[i].nodeId),
                   ),

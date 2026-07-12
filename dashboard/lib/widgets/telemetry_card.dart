@@ -27,12 +27,16 @@ class TelemetryCard extends StatefulWidget {
   final TelemetrySnapshot snapshot;
   final int index;
   final VoidCallback? onTap;
+  // Zone sibling (opposite kind): the soil node for a camera, or the camera for
+  // a soil node. Null when the zone has no such peer. Drives the zone-link strip.
+  final TelemetrySnapshot? linked;
 
   const TelemetryCard({
     super.key,
     required this.snapshot,
     this.index = 1,
     this.onTap,
+    this.linked,
   });
 
   @override
@@ -231,6 +235,8 @@ class _TelemetryCardState extends State<TelemetryCard>
               ),
               const SizedBox(height: AppSpace.md),
               body,
+              if (widget.linked != null)
+                _ZoneLinkStrip(self: snapshot, peer: widget.linked!),
               const SizedBox(height: AppSpace.sm),
               _LastSeenLine(ageSeconds: snapshot.ageSeconds),
             ],
@@ -555,6 +561,98 @@ class _PlaceholderBody extends StatelessWidget {
         ),
         const SizedBox(height: AppSpace.sm),
         Center(child: Text('AWAITING TELEMETRY', style: AppText.monoCaption)),
+      ],
+    );
+  }
+}
+
+/// Zone link: on a camera card, the linked soil node's live readings; on a soil
+/// card, the linked camera's latest diagnosis. Data is real — [peer] is the
+/// sibling's own snapshot, kept live by the same SSE stream.
+class _ZoneLinkStrip extends StatelessWidget {
+  final TelemetrySnapshot self;
+  final TelemetrySnapshot peer;
+  const _ZoneLinkStrip({required this.self, required this.peer});
+
+  @override
+  Widget build(BuildContext context) {
+    final showSoil = self.isCamera; // camera → soil readings; soil → vision
+    return Padding(
+      padding: const EdgeInsets.only(top: AppSpace.md),
+      child: Container(
+        padding: const EdgeInsets.all(AppSpace.sm),
+        decoration: const BoxDecoration(
+          color: AppColors.insetFill,
+          border: Border(left: BorderSide(color: AppColors.health, width: 2)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.link, size: 11, color: AppColors.textSecondary),
+                const SizedBox(width: AppSpace.xs),
+                Expanded(
+                  child: Text(
+                    '${showSoil ? 'ZONE SOIL' : 'ZONE VISION'} // ${peer.nodeId.toUpperCase()}',
+                    style: AppText.monoCaption
+                        .copyWith(fontSize: 9, letterSpacing: 1),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: AppSpace.xs),
+            if (showSoil) _soilFacts() else _visionFact(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _soilFacts() {
+    String f(double? v, String u) =>
+        v == null ? '--' : '${v.toStringAsFixed(v.abs() >= 10 ? 0 : 1)}$u';
+    return Wrap(
+      spacing: AppSpace.md,
+      runSpacing: 4,
+      children: [
+        _fact('VWC', f(peer.moisture, '%')),
+        _fact('TEMP', f(peer.temperature, '°')),
+        _fact('EC', f(peer.ec, '')),
+        _fact('BATT', f(peer.batteryPct, '%')),
+      ],
+    );
+  }
+
+  Widget _fact(String k, String v) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('$k ', style: AppText.monoCaption.copyWith(fontSize: 9)),
+          Text(v, style: AppText.monoValue.copyWith(fontSize: 11)),
+        ],
+      );
+
+  Widget _visionFact() {
+    if (!peer.hasDetection) {
+      return Text('AWAITING SCAN',
+          style: AppText.monoCaption.copyWith(fontSize: 10));
+    }
+    final c = peer.detectionHealthy ? AppColors.health : AppColors.alert;
+    final conf = ((peer.detectionConfidence ?? 0) * 100).toStringAsFixed(0);
+    return Row(
+      children: [
+        Icon(Icons.center_focus_weak, size: 12, color: c),
+        const SizedBox(width: AppSpace.xs),
+        Expanded(
+          child: Text(
+            '${peer.detectionShort} · $conf%',
+            style: AppText.monoValue.copyWith(fontSize: 11, color: c),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
       ],
     );
   }

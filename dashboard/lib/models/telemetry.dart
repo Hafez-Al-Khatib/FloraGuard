@@ -96,6 +96,14 @@ class TelemetrySnapshot {
   /// True when this node is a camera (by profile or by having a detection).
   bool get isCamera => profile?['kind'] == 'camera' || hasDetection;
 
+  /// True when this node is a soil sensor (by profile, or by having soil
+  /// readings and not being a camera). Used for zone linking. A soil node may
+  /// also drive irrigation, so actuator state is not disqualifying.
+  bool get isSoil => profile?['kind'] == 'soil' || (!isCamera && hasReadings);
+
+  /// Zone key this node belongs to, derived from its id (see [zoneOf]).
+  String? get zone => zoneOf(nodeId);
+
   /// True when the latest detection is a healthy leaf (no disease).
   bool get detectionHealthy {
     final i = detectionIssue;
@@ -282,4 +290,35 @@ class TelemetrySnapshot {
         'reset_reason': resetReason,
         'free_heap': freeHeap,
       };
+}
+
+/// Zone key for a node id, derived by stripping a leading device-type prefix so
+/// a camera and a soil node in the same zone resolve to the same key:
+/// `camera-zone-a-1` and `soil-zone-a-1` → `zone-a-1`. Returns null if no known
+/// prefix applies (the node can't be zone-linked by name).
+String? zoneOf(String nodeId) {
+  const prefixes = ['camera-', 'cam-', 'controller-', 'ctrl-', 'soil-'];
+  for (final p in prefixes) {
+    if (nodeId.startsWith(p) && nodeId.length > p.length) {
+      return nodeId.substring(p.length);
+    }
+  }
+  return null;
+}
+
+/// The zone sibling of [self] of the opposite kind — the soil node for a camera
+/// (`wantSoil: true`) or the camera for a soil node (`wantSoil: false`). Returns
+/// the first same-zone match, or null when the zone has no such peer.
+TelemetrySnapshot? linkedPeer(
+  Iterable<TelemetrySnapshot> all,
+  TelemetrySnapshot self, {
+  required bool wantSoil,
+}) {
+  final z = self.zone;
+  if (z == null) return null;
+  for (final s in all) {
+    if (s.nodeId == self.nodeId || s.zone != z) continue;
+    if (wantSoil ? s.isSoil : s.isCamera) return s;
+  }
+  return null;
 }
