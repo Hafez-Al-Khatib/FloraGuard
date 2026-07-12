@@ -255,6 +255,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             onAutomation: _openAutomation,
             onLogout: _logout,
             liveConnected: _liveConnected,
+            reporting: _reportingCount(cards),
+            total: cards.length,
           ),
           _AlertsBar(alerts: _alerts),
           const SizedBox(height: AppSpace.lg),
@@ -332,6 +334,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
             onAutomation: _openAutomation,
             onLogout: _logout,
             liveConnected: _liveConnected,
+            reporting: _reportingCount(cards),
+            total: cards.length,
             showAutomation: false,
           ),
           const SizedBox(height: AppSpace.md),
@@ -353,6 +357,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 }
 
+/// How many nodes are actually reporting data (any reading or a detection).
+/// Zero while the stream is live means silent devices, not a broken dashboard.
+int _reportingCount(List<TelemetrySnapshot> cards) =>
+    cards.where((c) => c.hasReadings || c.hasDetection).length;
+
 class _Header extends StatelessWidget {
   final VoidCallback onRefresh;
   final VoidCallback onCapture;
@@ -361,6 +370,8 @@ class _Header extends StatelessWidget {
   final VoidCallback onLogout;
   final bool liveConnected;
   final bool showAutomation;
+  final int reporting;
+  final int total;
   const _Header({
     required this.onRefresh,
     required this.onCapture,
@@ -368,6 +379,8 @@ class _Header extends StatelessWidget {
     required this.onAutomation,
     required this.onLogout,
     required this.liveConnected,
+    required this.reporting,
+    required this.total,
     this.showAutomation = true,
   });
 
@@ -375,6 +388,13 @@ class _Header extends StatelessWidget {
   Widget build(BuildContext context) {
     final statusColor = liveConnected ? AppColors.health : AppColors.warning;
     final statusLabel = liveConnected ? 'SYSTEM LIVE' : 'STREAM OFFLINE';
+    // A node "reports" if it has any readings or a detection. Zero reporting
+    // with a live stream means the devices are silent, not the app broken.
+    final reportColor = total == 0
+        ? AppColors.textSecondary
+        : (reporting == 0
+            ? AppColors.alert
+            : (reporting < total ? AppColors.warning : AppColors.health));
 
     const title = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -393,6 +413,9 @@ class _Header extends StatelessWidget {
         const SizedBox(width: AppSpace.sm),
         Text(statusLabel,
             style: AppText.monoCaption.copyWith(color: statusColor)),
+        const SizedBox(width: AppSpace.md),
+        Text('$reporting/$total REPORTING',
+            style: AppText.monoCaption.copyWith(color: reportColor)),
       ],
     );
 
