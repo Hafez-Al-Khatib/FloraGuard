@@ -345,13 +345,9 @@ class _SoilBody extends StatelessWidget {
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  _MiniReadout(
-                    label: 'Canopy Temp',
-                    value: snapshot.temperature,
-                    unit: '°C',
-                  ),
-                  const SizedBox(height: AppSpace.md),
+                  // No temp sensor on the current hardware — EC only.
                   _MiniReadout(label: 'EC', value: snapshot.ec, unit: 'mS/cm'),
                 ],
               ),
@@ -359,12 +355,20 @@ class _SoilBody extends StatelessWidget {
           ],
         ),
         const TechnicalDivider(),
-        MicroBar(
-          label: 'Battery Reserve',
-          valueText: '${_fmt(battery)}%',
-          ratio: (battery ?? 0) / 100.0,
-          color: _batteryColor(battery),
-        ),
+        if (snapshot.isMains)
+          MicroBar(
+            label: 'Power // Mains',
+            valueText: '100%',
+            ratio: 1.0,
+            color: AppColors.health,
+          )
+        else
+          MicroBar(
+            label: 'Battery Reserve',
+            valueText: '${_fmt(battery)}%',
+            ratio: (battery ?? 0) / 100.0,
+            color: _batteryColor(battery),
+          ),
         if (snapshot.hasActuator) ...[
           const SizedBox(height: AppSpace.md),
           _IrrigationRow(snapshot: snapshot),
@@ -619,9 +623,9 @@ class _ZoneLinkStrip extends StatelessWidget {
       runSpacing: 4,
       children: [
         _fact('VWC', f(peer.moisture, '%')),
-        _fact('TEMP', f(peer.temperature, '°')),
         _fact('EC', f(peer.ec, '')),
-        _fact('BATT', f(peer.batteryPct, '%')),
+        // No temp sensor; mains-powered → power reads full.
+        _fact('PWR', peer.isMains ? 'MAINS' : f(peer.batteryPct, '%')),
       ],
     );
   }

@@ -288,21 +288,15 @@ class _ReadingsPanel extends StatelessWidget {
         children: [
           const SectionLabel('Telemetry'),
           const SizedBox(height: AppSpace.md),
+          // No temp sensor on the current hardware; mains-powered nodes report
+          // no battery, so power reads full.
           Row(
             children: [
+              Expanded(child: _Stat(label: 'EC', value: snapshot.ec, unit: 'mS/cm')),
               Expanded(
-                child: _Stat(
-                  label: 'Canopy Temp',
-                  value: snapshot.temperature,
-                  unit: '°C',
-                ),
-              ),
-              Expanded(
-                child: _Stat(
-                  label: 'EC',
-                  value: snapshot.ec,
-                  unit: 'mS/cm',
-                ),
+                child: snapshot.isMains
+                    ? const _Stat(label: 'Power // Mains', value: 100, unit: '%')
+                    : _Stat(label: 'Battery', value: snapshot.batteryPct, unit: '%'),
               ),
             ],
           ),
@@ -311,19 +305,13 @@ class _ReadingsPanel extends StatelessWidget {
             children: [
               Expanded(
                 child: _Stat(
-                  label: 'Battery',
-                  value: snapshot.batteryPct,
-                  unit: '%',
-                ),
-              ),
-              Expanded(
-                child: _Stat(
                   label: 'Free Heap',
                   value: snapshot.freeHeap?.toDouble(),
                   unit: 'bytes',
                   isInt: true,
                 ),
               ),
+              const Expanded(child: SizedBox()),
             ],
           ),
         ],
@@ -881,14 +869,18 @@ class _ZonePanel extends StatelessWidget {
             Row(
               children: [
                 Expanded(child: _Stat(label: 'Soil Moisture', value: peer.moisture, unit: '%')),
-                Expanded(child: _Stat(label: 'Canopy Temp', value: peer.temperature, unit: '°C')),
+                Expanded(child: _Stat(label: 'EC', value: peer.ec, unit: 'mS/cm')),
               ],
             ),
             const TechnicalDivider(),
             Row(
               children: [
-                Expanded(child: _Stat(label: 'EC', value: peer.ec, unit: 'mS/cm')),
-                Expanded(child: _Stat(label: 'Battery', value: peer.batteryPct, unit: '%')),
+                Expanded(
+                  child: peer.isMains
+                      ? const _Stat(label: 'Power // Mains', value: 100, unit: '%')
+                      : _Stat(label: 'Battery', value: peer.batteryPct, unit: '%'),
+                ),
+                const Expanded(child: SizedBox()),
               ],
             ),
           ] else

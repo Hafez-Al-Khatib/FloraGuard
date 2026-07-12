@@ -104,6 +104,11 @@ class TelemetrySnapshot {
   /// Zone key this node belongs to, derived from its id (see [zoneOf]).
   String? get zone => zoneOf(nodeId);
 
+  /// True when the node is mains-powered — the current hardware has no battery
+  /// sensor, so a missing battery reading means it is plugged in (reserve reads
+  /// as full, not empty).
+  bool get isMains => batteryPct == null;
+
   /// True when the latest detection is a healthy leaf (no disease).
   bool get detectionHealthy {
     final i = detectionIssue;
