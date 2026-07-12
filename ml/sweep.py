@@ -37,11 +37,13 @@ from augment import build_eval_transform, build_train_transform
 from train import load_pretrained_backbone, run_epoch
 
 BACKBONES = [
-    "mobilenetv3_large_100",
+    "mobilenetv3_large_100",       # current
+    "mobilenetv4_conv_medium",     # 2024 successor to V3; better acc/latency, quantizes well
+    "mobilenetv4_conv_large",      # more capacity, still fine server-side on a Pi 5
     "efficientnet_b0",
     "tf_efficientnetv2_b0",
     "convnext_tiny",
-    "resnet34",
+    "resnet50",                    # the "standard ResNet" reference point
 ]
 
 
