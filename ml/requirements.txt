@@ -12,6 +12,8 @@ onnxscript>=0.1      # required by torch>=2.9 onnx export path
 onnxruntime>=1.18    # static INT8 quantization + eval
 onnxconverter-common>=1.14  # FP16 export (export_onnx.py --quant fp16)
 optuna>=3.6          # hyperparameter search (sweep.py)
+ultralytics>=8.2     # YOLO detector (ml/detect/*)
+pyyaml>=6.0          # data.yaml parsing in eval_detector.py
 pillow>=10.0
 numpy>=1.26
 scikit-learn>=1.4    # macro-F1, confusion matrix, class weights
