@@ -105,6 +105,12 @@ class Settings(BaseSettings):
     allowed_image_types: frozenset[str] = frozenset({"image/jpeg", "image/png", "image/webp"})
     model_path: Path = _DEFAULT_MODEL_PATH
     class_labels: list[str] = _DEFAULT_LABELS
+    # Per-plant object detector (optional). When detector.onnx is present the edge
+    # boxes + diagnoses each plant; otherwise it falls back to the whole-frame
+    # classifier above.
+    detector_path: Path = Path("models/detector.onnx")
+    detector_conf: float = 0.25  # min box confidence to keep
+    detector_iou: float = 0.45   # NMS IoU threshold
 
     # Logging
     log_level: str = "INFO"
