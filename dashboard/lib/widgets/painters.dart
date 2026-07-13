@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../models/telemetry.dart';
 import '../theme/app_theme.dart';
 
 /// Code-drawn art for the "evolved technical" look. Everything in here is a
@@ -301,6 +302,67 @@ class FlowLinePainter extends CustomPainter {
   @override
   bool shouldRepaint(FlowLinePainter old) =>
       old.phase != phase || old.active != active || old.color != color;
+}
+
+// ── Per-plant detection boxes ────────────────────────────────────────────────
+
+/// Short group labels for box chips.
+const _groupShort = {
+  'healthy': 'HEALTHY',
+  'blight': 'BLIGHT',
+  'leaf_spot': 'SPOT',
+  'viral': 'VIRAL',
+  'pest': 'PEST',
+};
+
+/// Draws detection boxes over a frame: normalized [cx,cy,w,h] scaled to the
+/// paint size, green for healthy plants and alert-red for diseased, each with a
+/// small group + confidence chip. Boxless (whole-frame) detections are skipped.
+class BoxOverlayPainter extends CustomPainter {
+  final List<DetectionBox> boxes;
+  BoxOverlayPainter({required this.boxes});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final b in boxes) {
+      final box = b.box;
+      if (box == null) continue;
+      final rect = Rect.fromCenter(
+        center: Offset(box[0] * size.width, box[1] * size.height),
+        width: box[2] * size.width,
+        height: box[3] * size.height,
+      );
+      final c = b.healthy ? AppColors.health : AppColors.alert;
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2
+          ..color = c,
+      );
+      final tp = TextPainter(
+        text: TextSpan(
+          text: '${_groupShort[b.group] ?? b.group.toUpperCase()} '
+              '${(b.confidence * 100).toStringAsFixed(0)}%',
+          style: const TextStyle(
+            color: AppColors.bgBase,
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.5,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      final chip = Rect.fromLTWH(
+          rect.left, (rect.top - tp.height - 4).clamp(0.0, size.height),
+          tp.width + 8, tp.height + 4);
+      canvas.drawRect(chip, Paint()..color = c);
+      tp.paint(canvas, Offset(chip.left + 4, chip.top + 2));
+    }
+  }
+
+  @override
+  bool shouldRepaint(BoxOverlayPainter old) => !identical(old.boxes, boxes);
 }
 
 // ── Login backdrop ───────────────────────────────────────────────────────────

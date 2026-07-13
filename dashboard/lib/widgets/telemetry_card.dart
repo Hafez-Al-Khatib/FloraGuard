@@ -482,6 +482,9 @@ class _CameraBody extends StatelessWidget {
                       painter: CornerBracketsPainter(color: c, reveal: r),
                     ),
                   ),
+                // Per-plant boxes over the frame (empty for whole-frame model).
+                if (snapshot.detections.any((d) => d.box != null))
+                  CustomPaint(painter: BoxOverlayPainter(boxes: snapshot.detections)),
                 if (hasDet)
                   Positioned(
                     left: AppSpace.sm,

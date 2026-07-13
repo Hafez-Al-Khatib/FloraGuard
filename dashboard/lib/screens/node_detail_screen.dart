@@ -690,6 +690,8 @@ class _VisionPanelState extends State<_VisionPanel>
   // The confident exact-disease diagnosis + its specific treatment, when the
   // backend deemed the fine label reliable enough (else null → group only).
   Map<String, dynamic>? _specific;
+  // Per-plant detection boxes (empty for the whole-frame classifier).
+  List<DetectionBox> _detections = const [];
 
   late final AnimationController _scan = AnimationController(
     vsync: this,
@@ -728,6 +730,7 @@ class _VisionPanelState extends State<_VisionPanel>
       _loadingImage = false;
       _treatments = diag?['treatments'] as List<dynamic>?;
       _specific = diag?['specific'] as Map<String, dynamic>?;
+      _detections = DetectionBox.listFrom(diag?['detections']);
     });
     // Sweep once the frame is on screen.
     if (_image != null) _scan.forward(from: 0);
@@ -779,13 +782,23 @@ class _VisionPanelState extends State<_VisionPanel>
                           painter: ScanlinePainter(t: _scan.value, color: c),
                         ),
                       ),
-                      CustomPaint(painter: CornerBracketsPainter(color: c)),
+                      if (_detections.any((d) => d.box != null))
+                        CustomPaint(painter: BoxOverlayPainter(boxes: _detections))
+                      else
+                        CustomPaint(painter: CornerBracketsPainter(color: c)),
                     ],
                   ],
                 ),
               ),
             ),
           ),
+          if (_detections.length > 1) ...[
+            const SizedBox(height: AppSpace.md),
+            SectionLabel('${_detections.length} Plants Detected'),
+            const SizedBox(height: AppSpace.xs),
+            for (final d in _detections)
+              _DetectedPlantRow(box: d),
+          ],
           const SizedBox(height: AppSpace.md),
           if (s.hasDetection) ...[
             Text(s.detectionShort,
@@ -992,6 +1005,36 @@ class _JumpChip extends StatelessWidget {
               style: AppText.monoCaption
                   .copyWith(fontSize: 9, letterSpacing: 1.2)),
         ),
+      ),
+    );
+  }
+}
+
+/// One row in the per-plant detection list: colour dot, disease/group, confidence.
+class _DetectedPlantRow extends StatelessWidget {
+  final DetectionBox box;
+  const _DetectedPlantRow({required this.box});
+
+  @override
+  Widget build(BuildContext context) {
+    final c = box.healthy ? AppColors.health : AppColors.alert;
+    final label = box.fine.isNotEmpty
+        ? _SpecificTreatment._pretty(box.fine)
+        : box.group;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Container(width: 6, height: 6, color: c),
+          const SizedBox(width: AppSpace.sm),
+          Expanded(
+            child: Text(label.toUpperCase(),
+                style: AppText.monoCaption.copyWith(color: c),
+                maxLines: 1, overflow: TextOverflow.ellipsis),
+          ),
+          Text('${(box.confidence * 100).toStringAsFixed(0)}%',
+              style: AppText.monoCaption),
+        ],
       ),
     );
   }

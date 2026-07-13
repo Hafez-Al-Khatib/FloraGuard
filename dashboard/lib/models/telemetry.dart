@@ -1,3 +1,44 @@
+/// One detected plant/leaf: a normalized [cx, cy, w, h] box (0–1) with its
+/// coarse group, specific disease, and confidence. `box` is null for a
+/// whole-frame (classifier-fallback) diagnosis.
+class DetectionBox {
+  final List<double>? box; // [cx, cy, w, h] normalized
+  final String group;
+  final String fine;
+  final double confidence;
+
+  const DetectionBox({
+    required this.box,
+    required this.group,
+    required this.fine,
+    required this.confidence,
+  });
+
+  factory DetectionBox.fromJson(Map<String, dynamic> j) {
+    final raw = j['box'];
+    List<double>? b;
+    if (raw is List && raw.length == 4) {
+      b = raw.map((v) => (v as num).toDouble()).toList();
+    }
+    return DetectionBox(
+      box: b,
+      group: j['group'] as String? ?? 'healthy',
+      fine: j['fine'] as String? ?? '',
+      confidence: (j['confidence'] as num?)?.toDouble() ?? 0.0,
+    );
+  }
+
+  static List<DetectionBox> listFrom(dynamic raw) {
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((m) => DetectionBox.fromJson(m.cast<String, dynamic>()))
+        .toList();
+  }
+
+  bool get healthy => group == 'healthy';
+}
+
 class TelemetrySnapshot {
   final String nodeId;
   final double? moisture;
@@ -19,6 +60,8 @@ class TelemetrySnapshot {
   final String? detectionIssue;
   final double? detectionConfidence;
   final DateTime? detectionAt;
+  // Per-plant detection boxes (empty for the whole-frame classifier fallback).
+  final List<DetectionBox> detections;
   // Irrigation actuator state (soil/zone nodes). `actuatorBound` is "virtual"
   // (no controller flashed) or "hardware" (a controller node is connected).
   final bool? actuatorOn;
@@ -44,6 +87,7 @@ class TelemetrySnapshot {
     this.detectionIssue,
     this.detectionConfidence,
     this.detectionAt,
+    this.detections = const [],
     this.actuatorOn,
     this.actuatorReason,
     this.actuatorBound,
@@ -80,6 +124,7 @@ class TelemetrySnapshot {
       detectionAt: det is Map && det['timestamp'] != null
           ? DateTime.tryParse(det['timestamp'] as String)
           : null,
+      detections: det is Map ? DetectionBox.listFrom(det['detections']) : const [],
       actuatorOn: act is Map ? act['on'] as bool? : null,
       actuatorReason: act is Map ? act['reason'] as String? : null,
       actuatorBound: act is Map ? act['bound'] as String? : null,
@@ -185,6 +230,7 @@ class TelemetrySnapshot {
     String? detectionIssue,
     double? detectionConfidence,
     DateTime? detectionAt,
+    List<DetectionBox>? detections,
     bool? actuatorOn,
     String? actuatorReason,
     String? actuatorBound,
@@ -205,6 +251,7 @@ class TelemetrySnapshot {
         detectionIssue: detectionIssue ?? this.detectionIssue,
         detectionConfidence: detectionConfidence ?? this.detectionConfidence,
         detectionAt: detectionAt ?? this.detectionAt,
+        detections: detections ?? this.detections,
         actuatorOn: actuatorOn ?? this.actuatorOn,
         actuatorReason: actuatorReason ?? this.actuatorReason,
         actuatorBound: actuatorBound ?? this.actuatorBound,
@@ -229,6 +276,7 @@ class TelemetrySnapshot {
         detectionIssue: fresh.detectionIssue,
         detectionConfidence: fresh.detectionConfidence,
         detectionAt: fresh.detectionAt,
+        detections: fresh.detections,
         actuatorOn: fresh.actuatorOn,
         actuatorReason: fresh.actuatorReason,
         actuatorBound: fresh.actuatorBound,
@@ -259,6 +307,7 @@ class TelemetrySnapshot {
           detectionAt: payload['at'] != null
               ? DateTime.tryParse(payload['at'] as String)
               : null,
+          detections: DetectionBox.listFrom(payload['detections']),
           updateTick: updateTick + 1,
         );
       case 'actuator':
