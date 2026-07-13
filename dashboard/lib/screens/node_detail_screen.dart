@@ -18,11 +18,14 @@ import '../widgets/telemetry_card.dart' show heroTagFor;
 class NodeDetailScreen extends StatefulWidget {
   final String nodeId;
   final TelemetrySnapshot initial;
+  // Zone sibling (opposite kind) — soil for a camera, camera for a soil node.
+  final TelemetrySnapshot? linked;
 
   const NodeDetailScreen({
     super.key,
     required this.nodeId,
     required this.initial,
+    this.linked,
   });
 
   @override
@@ -31,6 +34,7 @@ class NodeDetailScreen extends StatefulWidget {
 
 class _NodeDetailScreenState extends State<NodeDetailScreen> {
   late TelemetrySnapshot _snapshot;
+  TelemetrySnapshot? _linked;
   StreamSubscription<Map<String, dynamic>>? _liveSub;
   Timer? _staleTimer;
 
@@ -38,6 +42,7 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
   void initState() {
     super.initState();
     _snapshot = widget.initial;
+    _linked = widget.linked;
     _subscribeLive();
     // Re-render every 15 s so "LAST CONTACT" counters tick up even when no
     // SSE event arrives — otherwise the panel would freeze on whatever value
@@ -54,7 +59,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
     _liveSub = api.streamTelemetry().listen(
       (event) {
         if (!mounted) return;
-        if (event['node_id'] != widget.nodeId) return;
+        final nodeId = event['node_id'];
+        final isSelf = nodeId == widget.nodeId;
+        final isPeer = _linked != null && nodeId == _linked!.nodeId;
+        if (!isSelf && !isPeer) return;
         final data = event['data'] as Map<String, dynamic>?;
         if (data == null) return;
         // Typed envelope — alerts are handled by the dashboard's alert bar,
@@ -63,7 +71,13 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
         if (type == 'alert') return;
         final payload =
             (data['payload'] as Map?)?.cast<String, dynamic>() ?? const {};
-        setState(() => _snapshot = _snapshot.applyEvent(type, payload));
+        setState(() {
+          if (isSelf) {
+            _snapshot = _snapshot.applyEvent(type, payload);
+          } else {
+            _linked = _linked!.applyEvent(type, payload);
+          }
+        });
       },
       cancelOnError: false,
     );
@@ -142,6 +156,10 @@ class _NodeDetailScreenState extends State<NodeDetailScreen> {
                           ),
                           const SizedBox(height: AppSpace.lg),
                           _HistoryChartPanel(nodeId: widget.nodeId),
+                          const SizedBox(height: AppSpace.lg),
+                        ],
+                        if (_linked != null) ...[
+                          _ZonePanel(self: s, peer: _linked!),
                           const SizedBox(height: AppSpace.lg),
                         ],
                         _DiagnosticsPanel(snapshot: s),
@@ -270,21 +288,15 @@ class _ReadingsPanel extends StatelessWidget {
         children: [
           const SectionLabel('Telemetry'),
           const SizedBox(height: AppSpace.md),
+          // No temp sensor on the current hardware; mains-powered nodes report
+          // no battery, so power reads full.
           Row(
             children: [
+              Expanded(child: _Stat(label: 'EC', value: snapshot.ec, unit: 'mS/cm')),
               Expanded(
-                child: _Stat(
-                  label: 'Canopy Temp',
-                  value: snapshot.temperature,
-                  unit: '°C',
-                ),
-              ),
-              Expanded(
-                child: _Stat(
-                  label: 'EC',
-                  value: snapshot.ec,
-                  unit: 'mS/cm',
-                ),
+                child: snapshot.isMains
+                    ? const _Stat(label: 'Power // Mains', value: 100, unit: '%')
+                    : _Stat(label: 'Battery', value: snapshot.batteryPct, unit: '%'),
               ),
             ],
           ),
@@ -293,19 +305,13 @@ class _ReadingsPanel extends StatelessWidget {
             children: [
               Expanded(
                 child: _Stat(
-                  label: 'Battery',
-                  value: snapshot.batteryPct,
-                  unit: '%',
-                ),
-              ),
-              Expanded(
-                child: _Stat(
                   label: 'Free Heap',
                   value: snapshot.freeHeap?.toDouble(),
                   unit: 'bytes',
                   isInt: true,
                 ),
               ),
+              const Expanded(child: SizedBox()),
             ],
           ),
         ],
@@ -827,6 +833,114 @@ class _TreatmentBlock extends StatelessWidget {
                   style: AppText.monoValue.copyWith(height: 1.4)),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Zone link panel: the linked sibling of the opposite kind. On a camera detail
+/// it shows the zone's live soil readings; on a soil detail, the zone camera's
+/// latest diagnosis. [peer] is the sibling's own snapshot, kept live via SSE.
+class _ZonePanel extends StatelessWidget {
+  final TelemetrySnapshot self;
+  final TelemetrySnapshot peer;
+  const _ZonePanel({required this.self, required this.peer});
+
+  @override
+  Widget build(BuildContext context) {
+    final showSoil = self.isCamera;
+    return GlassCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.link, size: 14, color: AppColors.textSecondary),
+              const SizedBox(width: AppSpace.sm),
+              Expanded(
+                child: SectionLabel(
+                    '${showSoil ? 'Zone Soil' : 'Zone Vision'} // ${peer.nodeId}'),
+              ),
+              _JumpChip(nodeId: peer.nodeId, initial: peer, linked: self),
+            ],
+          ),
+          const SizedBox(height: AppSpace.md),
+          if (showSoil) ...[
+            Row(
+              children: [
+                Expanded(child: _Stat(label: 'Soil Moisture', value: peer.moisture, unit: '%')),
+                Expanded(child: _Stat(label: 'EC', value: peer.ec, unit: 'mS/cm')),
+              ],
+            ),
+            const TechnicalDivider(),
+            Row(
+              children: [
+                Expanded(
+                  child: peer.isMains
+                      ? const _Stat(label: 'Power // Mains', value: 100, unit: '%')
+                      : _Stat(label: 'Battery', value: peer.batteryPct, unit: '%'),
+                ),
+                const Expanded(child: SizedBox()),
+              ],
+            ),
+          ] else
+            _visionSummary(),
+        ],
+      ),
+    );
+  }
+
+  Widget _visionSummary() {
+    if (!peer.hasDetection) {
+      return Text('NO SCAN YET FROM ZONE CAMERA', style: AppText.monoCaption);
+    }
+    final c = peer.detectionHealthy ? AppColors.health : AppColors.alert;
+    final conf = (peer.detectionConfidence ?? 0).clamp(0.0, 1.0);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(peer.detectionShort,
+            style: AppText.title.copyWith(color: c, fontSize: 24)),
+        const SizedBox(height: AppSpace.sm),
+        MicroBar(
+          label: 'Confidence',
+          valueText: '${(conf * 100).toStringAsFixed(0)}%',
+          ratio: conf,
+          color: c,
+        ),
+      ],
+    );
+  }
+}
+
+/// Small "open" chip that navigates to the linked node's own detail screen.
+class _JumpChip extends StatelessWidget {
+  final String nodeId;
+  final TelemetrySnapshot initial;
+  final TelemetrySnapshot linked;
+  const _JumpChip(
+      {required this.nodeId, required this.initial, required this.linked});
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) =>
+                NodeDetailScreen(nodeId: nodeId, initial: initial, linked: linked),
+          ),
+        ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            border: Border.all(color: AppColors.glassBorder),
+          ),
+          child: Text('OPEN',
+              style: AppText.monoCaption
+                  .copyWith(fontSize: 9, letterSpacing: 1.2)),
+        ),
       ),
     );
   }

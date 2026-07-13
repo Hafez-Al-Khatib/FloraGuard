@@ -50,9 +50,9 @@ class Settings(BaseSettings):
     chat_timeout: float = 60.0
     # Gemini (Google AI Studio — free tier: https://aistudio.google.com/apikey)
     gemini_api_key: str = ""
-    # gemini-2.5-flash is the current default in AI Studio (GA). If a key was
-    # provisioned recently it may not have 2.0 access. Override via env if needed.
-    gemini_model: str = "gemini-2.5-flash"
+    # gemini-3.1-flash-lite is the current free-tier model in AI Studio.
+    # Override via env if needed.
+    gemini_model: str = "gemini-3.1-flash-lite"
     # Anthropic Claude (paid, ~$0.25/M tokens with Haiku)
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-haiku-4-5-20251001"
