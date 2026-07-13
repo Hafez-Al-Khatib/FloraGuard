@@ -13,10 +13,12 @@ from slowapi.util import get_remote_address
 
 from auth import Principal, require_admin, require_auth
 from config import get_settings
+from detector import Detector
 from schemas import (
     CameraAnalysisResponse,
     CameraUploadResponse,
     ChatQuery,
+    DetectionBox,
     DiagnosticResult,
     NodeIdPath,
     SpecificDiagnosis,
@@ -119,6 +121,12 @@ def get_inference(request: Request) -> InferenceEngine:
     return request.app.state.inference
 
 
+def get_detector(request: Request) -> Detector:
+    if getattr(request.app.state, "detector", None) is None:
+        request.app.state.detector = Detector(get_settings())
+    return request.app.state.detector
+
+
 def get_chat(request: Request) -> AgronomistChat:
     if getattr(request.app.state, "chat", None) is None:
         request.app.state.chat = AgronomistChat(get_settings())
@@ -214,15 +222,13 @@ async def receive_camera_frame(
     # upload, so the frame is still buffered for a manual /analyze.
     try:
         inference = get_inference(request)
-        crop = await _crop_for_node(cache, node_id)
-        # to_thread: ONNX inference is CPU-bound; running it inline froze the
-        # event loop (SSE, telemetry ingest, both engines) for every upload.
-        group, gconf, fine, fconf = await asyncio.to_thread(
-            inference.predict_grouped, data, crop
-        )
-        await _record_detection(cache, node_id, group, gconf, fine, fconf)
+        # Per-plant boxes if a detector is present, else a single whole-frame box.
+        detections = await _detect(request, cache, inference, node_id, data)
+        await _record_detection(cache, node_id, detections)
+        dom = _dominant(detections)
         await logger.ainfo(
-            "camera_frame_analyzed", node_id=node_id, issue=group, confidence=gconf
+            "camera_frame_analyzed", node_id=node_id,
+            boxes=len(detections), issue=(dom or {}).get("group"),
         )
     except Exception as exc:
         await logger.aerror("auto_analyze_failed", node_id=node_id, error=str(exc))
@@ -239,43 +245,47 @@ def _is_valid_image(data: bytes) -> bool:
     )
 
 
-async def _record_detection(
-    cache: Cache,
-    node_id: str,
-    group: str,
-    confidence: float,
-    fine: str = "",
-    fine_confidence: float = 0.0,
-) -> str:
-    """Persist a disease detection and surface it: cache the diagnosis, pair the
-    camera node, push it to the live SSE feed, and log a safety suggestion for a
-    high-confidence disease. Returns the detection timestamp.
+def _dominant(detections: list[dict]) -> dict | None:
+    """The box that drives the headline: highest-confidence diseased box, else
+    the highest-confidence box, else None (empty)."""
+    diseased = [d for d in detections if not TreatmentDB.is_healthy_group(d["group"])]
+    return max(diseased or detections, key=lambda d: d["confidence"], default=None)
 
-    The diagnosis is the coarse GROUP (accurate in the field); the fine label is
-    kept as detail. Shared by GET /analyze and the auto-analyze on /upload-frame.
+
+async def _record_detection(cache: Cache, node_id: str, detections: list[dict]) -> str:
+    """Persist a (possibly multi-plant) detection and surface it: cache the box
+    list + a backward-compat dominant-group summary, pair the camera node, push to
+    the live SSE feed, and log a safety suggestion for a high-confidence disease.
+
+    Each detection is {box, group, fine, confidence, fine_confidence}. Shared by
+    GET /analyze and the auto-analyze on /upload-frame.
     """
     detected_at = utc_now_iso()
-    issue = GROUP_DISPLAY.get(group, group)
+    dom = _dominant(detections)
+    if dom is None:
+        group, issue, confidence, fine, fine_conf = "healthy", "No Detection", 0.0, "", 0.0
+    else:
+        group = dom["group"]
+        issue = GROUP_DISPLAY.get(group, group)
+        confidence = dom["confidence"]
+        fine = dom.get("fine", "")
+        fine_conf = dom.get("fine_confidence", confidence)
     record = {
-        "issue": issue,
-        "confidence": confidence,
-        "group": group,
-        "fine": fine,
-        "fine_confidence": fine_confidence,
-        "timestamp": detected_at,
+        "issue": issue, "confidence": confidence, "group": group,
+        "fine": fine, "fine_confidence": fine_conf,
+        "detections": detections, "timestamp": detected_at,
     }
     await cache.set_camera_diagnostics(node_id, record)
     # Write-once: a detection on a node that also reports soil telemetry must
     # not flip its profile to "camera" (that hides its irrigation controls).
     await cache.note_node_seen(node_id, default_profile={"kind": "camera"})
     await cache.emit_event(
-        "detection",
-        node_id,
-        {"issue": issue, "confidence": confidence, "group": group, "at": detected_at},
+        "detection", node_id,
+        {"issue": issue, "confidence": confidence, "group": group,
+         "detections": detections, "at": detected_at},
     )
     # Safety-first automation: log a suggestion, never actuate without confirmation.
-    # Group confidence is the summed softmax over the group, so 0.70 is meaningful.
-    if not TreatmentDB.is_healthy_group(group) and confidence > 0.70:
+    if dom is not None and not TreatmentDB.is_healthy_group(group) and confidence > 0.70:
         await cache.log_automation_decision(
             node_id=node_id,
             decision="SUGGESTION",
@@ -286,6 +296,23 @@ async def _record_detection(
             },
         )
     return detected_at
+
+
+async def _detect(
+    request: Request, cache: Cache, inference: InferenceEngine, node_id: str, data: bytes
+) -> list[dict]:
+    """Per-plant boxes from the detector when present, else a single whole-frame
+    box from the group+crop classifier. Each item is
+    {box, group, fine, confidence, fine_confidence}."""
+    crop = await _crop_for_node(cache, node_id)
+    detector = get_detector(request)
+    if detector.session is not None:
+        boxes = await asyncio.to_thread(detector.detect, data, crop)
+        # A detector box's score is about its fine class, so it's the fine conf too.
+        return [{**b, "fine_confidence": b["confidence"]} for b in boxes]
+    group, gconf, fine, fconf = await asyncio.to_thread(inference.predict_grouped, data, crop)
+    return [{"box": None, "group": group, "fine": fine,
+             "confidence": gconf, "fine_confidence": fconf}]
 
 
 def _specific_diagnosis(fine: str, fine_conf: float) -> SpecificDiagnosis | None:
@@ -326,12 +353,9 @@ async def evaluate_crop_health(
             detail="No fresh image found in memory bank.",
         )
 
-    crop = await _crop_for_node(cache, node_id)
     t0 = time.perf_counter()
     try:
-        group, gconf, fine, fconf = await asyncio.to_thread(
-            inference.predict_grouped, img_bytes, crop
-        )
+        detections = await _detect(request, cache, inference, node_id, img_bytes)
     except Exception as exc:
         await logger.aerror("inference_failed", node_id=node_id, error=str(exc))
         raise HTTPException(
@@ -340,22 +364,42 @@ async def evaluate_crop_health(
         ) from exc
     inference_ms = round((time.perf_counter() - t0) * 1000, 2)
 
-    diagnostic = DiagnosticResult(issue=GROUP_DISPLAY.get(group, group), confidence=gconf)
     # Cache, pair, push to SSE, and log a safety suggestion (shared with the
     # auto-analyze on /upload-frame).
-    await _record_detection(cache, node_id, group, gconf, fine, fconf)
+    await _record_detection(cache, node_id, detections)
 
-    # Treatment recommendations for the diagnosed group (None when healthy),
-    # plus the exact-disease treatment when the model is confident enough.
-    treatments = TreatmentDB.treatments_for_group(group)
-    specific = _specific_diagnosis(fine, fconf)
+    dom = _dominant(detections)
+    if dom is None:
+        return CameraAnalysisResponse(
+            node_id=node_id,
+            anomalies=DiagnosticResult(issue="No Detection", confidence=0.0),
+            inference_ms=inference_ms,
+        )
+    diagnostic = DiagnosticResult(
+        issue=GROUP_DISPLAY.get(dom["group"], dom["group"]), confidence=dom["confidence"]
+    )
+    # Aggregate group treatments over every distinct diseased group in the frame,
+    # plus the dominant box's exact-disease treatment when confident enough.
+    groups: list[str] = []
+    for d in detections:
+        if not TreatmentDB.is_healthy_group(d["group"]) and d["group"] not in groups:
+            groups.append(d["group"])
+    treatments: list = []
+    for g in groups:
+        treatments += TreatmentDB.treatments_for_group(g) or []
+    specific = _specific_diagnosis(dom.get("fine", ""), dom.get("fine_confidence", dom["confidence"]))
 
     return CameraAnalysisResponse(
         node_id=node_id,
         anomalies=diagnostic,
         inference_ms=inference_ms,
-        treatments=treatments,
+        treatments=treatments or None,
         specific=specific,
+        detections=[
+            DetectionBox(box=d["box"], group=d["group"], fine=d.get("fine", ""),
+                         confidence=d["confidence"])
+            for d in detections
+        ],
     )
 
 
@@ -409,6 +453,7 @@ async def latest_diagnostics(
         "treatments": treatments,
         "fine": fine,
         "specific": specific.model_dump() if specific else None,
+        "detections": diag.get("detections", []),
     }
 
 
@@ -577,6 +622,7 @@ async def _node_snapshot(cache: Cache, node_id: str) -> dict:
             "issue": diag["issue"],
             "confidence": diag.get("confidence"),
             "timestamp": diag.get("timestamp"),
+            "detections": diag.get("detections", []),
         }
 
     # Actuator (irrigation zone) state, if this node is a controllable zone.

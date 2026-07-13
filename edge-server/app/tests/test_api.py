@@ -17,7 +17,7 @@ async def client():
         yield ac
     # Keep tests isolated: drop overrides and any lazily-cached singletons.
     app.dependency_overrides.clear()
-    for attr in ("cache", "tsdb", "inference", "chat"):
+    for attr in ("cache", "tsdb", "inference", "chat", "detector"):
         if hasattr(app.state, attr):
             setattr(app.state, attr, None)
 
@@ -146,6 +146,36 @@ async def test_analyze_low_specific_confidence_is_group_only(client: AsyncClient
     body = (await client.get("/api/v1/node/cam-01/analyze", headers=AUTH)).json()
     assert body["treatments"]  # group treatment present
     assert body["specific"] is None
+
+
+@pytest.mark.anyio
+async def test_analyze_detector_returns_per_plant_boxes(client: AsyncClient):
+    """With a detector present, /analyze returns per-plant boxes; the dominant
+    diseased box drives the headline and treatments aggregate its group."""
+    mock_cache = AsyncMock()
+    mock_cache.get_camera_frame = AsyncMock(return_value=b"\xff\xd8\xff x")
+    mock_cache.set_camera_diagnostics = AsyncMock()
+    mock_cache.log_automation_decision = AsyncMock()
+    mock_cache.get_node_profile = AsyncMock(return_value={"kind": "camera", "crop": "tomato"})
+    app.dependency_overrides[get_cache] = lambda: mock_cache
+
+    class StubDetector:
+        session = True
+
+        def detect(self, data, crop=None):  # noqa: ARG002
+            return [
+                {"box": [0.3, 0.3, 0.2, 0.2], "group": "blight",
+                 "fine": "Tomato_Late_blight", "confidence": 0.90},
+                {"box": [0.7, 0.7, 0.2, 0.2], "group": "healthy",
+                 "fine": "Tomato_healthy", "confidence": 0.80},
+            ]
+
+    app.state.detector = StubDetector()
+    body = (await client.get("/api/v1/node/cam-01/analyze", headers=AUTH)).json()
+    assert body["anomalies"]["issue"] == "Blight"       # dominant diseased box
+    assert len(body["detections"]) == 2
+    assert all(len(d["box"]) == 4 for d in body["detections"])
+    assert body["treatments"], "expected the blight group treatment"
 
 
 @pytest.mark.anyio

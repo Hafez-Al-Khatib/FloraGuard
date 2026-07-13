@@ -42,6 +42,15 @@ class SpecificDiagnosis(BaseModel):
     treatments: list[TreatmentOption] | None = None
 
 
+class DetectionBox(BaseModel):
+    """One detected plant/leaf. `box` is normalized [cx, cy, w, h] (0-1), or None
+    for a whole-frame (classifier-fallback) diagnosis."""
+    box: list[float] | None = None
+    group: str
+    fine: str = ""
+    confidence: float = Field(..., ge=0.0, le=1.0)
+
+
 class CameraAnalysisResponse(BaseModel):
     node_id: str
     anomalies: DiagnosticResult | None
@@ -49,6 +58,8 @@ class CameraAnalysisResponse(BaseModel):
     treatments: list[TreatmentOption] | None = None
     # The specific disease + its treatment, when confidence warrants it.
     specific: SpecificDiagnosis | None = None
+    # Per-plant boxes (empty for the whole-frame classifier fallback).
+    detections: list[DetectionBox] = []
 
 
 class ChatQuery(BaseModel):

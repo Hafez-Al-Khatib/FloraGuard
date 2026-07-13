@@ -79,6 +79,10 @@ async def lifespan(app: FastAPI):
 
     app.state.cache = Cache(settings)
     app.state.inference = InferenceEngine(settings)
+    # Per-plant detector (optional): boxes each plant when detector.onnx is
+    # present, else the classifier handles the whole frame.
+    from detector import Detector
+    app.state.detector = Detector(settings)
     app.state.chat = AgronomistChat(settings)
     try:
         app.state.tsdb = TimeSeriesDB(settings)
