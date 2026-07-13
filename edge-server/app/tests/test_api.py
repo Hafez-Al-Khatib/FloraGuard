@@ -67,7 +67,7 @@ async def test_analyze_returns_diagnosis_and_treatments(client: AsyncClient):
         def predict(self, image_bytes):  # noqa: ARG002
             return ("Tomato_Late_blight", 0.91)
 
-        def predict_grouped(self, image_bytes):  # noqa: ARG002
+        def predict_grouped(self, image_bytes, crop=None):  # noqa: ARG002
             return ("blight", 0.91, "Tomato_Late_blight", 0.91)
 
     app.dependency_overrides[get_inference] = lambda: StubInference()
@@ -95,7 +95,7 @@ async def test_analyze_healthy_attaches_no_treatments(client: AsyncClient):
         def predict(self, image_bytes):  # noqa: ARG002
             return ("Tomato_healthy", 0.97)
 
-        def predict_grouped(self, image_bytes):  # noqa: ARG002
+        def predict_grouped(self, image_bytes, crop=None):  # noqa: ARG002
             return ("healthy", 0.97, "Tomato_healthy", 0.97)
 
     app.dependency_overrides[get_inference] = lambda: StubInference()
@@ -119,7 +119,7 @@ async def test_analyze_confident_specific_attaches_exact_treatment(client: Async
     app.dependency_overrides[get_cache] = lambda: mock_cache
 
     class StubInference:
-        def predict_grouped(self, image_bytes):  # noqa: ARG002
+        def predict_grouped(self, image_bytes, crop=None):  # noqa: ARG002
             return ("blight", 0.90, "Tomato_Late_blight", 0.80)  # fine 0.80 >= 0.5
 
     app.dependency_overrides[get_inference] = lambda: StubInference()
@@ -139,13 +139,36 @@ async def test_analyze_low_specific_confidence_is_group_only(client: AsyncClient
     app.dependency_overrides[get_cache] = lambda: mock_cache
 
     class StubInference:
-        def predict_grouped(self, image_bytes):  # noqa: ARG002
+        def predict_grouped(self, image_bytes, crop=None):  # noqa: ARG002
             return ("blight", 0.60, "Tomato_Late_blight", 0.30)  # fine 0.30 < 0.5
 
     app.dependency_overrides[get_inference] = lambda: StubInference()
     body = (await client.get("/api/v1/node/cam-01/analyze", headers=AUTH)).json()
     assert body["treatments"]  # group treatment present
     assert body["specific"] is None
+
+
+@pytest.mark.anyio
+async def test_set_node_crop(client: AsyncClient):
+    """Assigning a crop updates the profile and echoes it back."""
+    mock_cache = AsyncMock()
+    mock_cache.update_profile = AsyncMock()
+    mock_cache.get_node_profile = AsyncMock(return_value={"kind": "camera", "crop": "tomato"})
+    mock_cache.emit_event = AsyncMock()
+    app.dependency_overrides[get_cache] = lambda: mock_cache
+
+    r = await client.put("/api/v1/node/camera-zone-a/crop", json={"crop": "tomato"}, headers=AUTH)
+    assert r.status_code == 200
+    assert r.json()["crop"] == "tomato"
+    mock_cache.update_profile.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_set_node_crop_rejects_invalid(client: AsyncClient):
+    mock_cache = AsyncMock()
+    app.dependency_overrides[get_cache] = lambda: mock_cache
+    r = await client.put("/api/v1/node/camera-zone-a/crop", json={"crop": "banana"}, headers=AUTH)
+    assert r.status_code == 400
 
 
 @pytest.mark.anyio
@@ -571,7 +594,7 @@ async def test_upload_frame_auto_analyzes(client: AsyncClient):
         def predict(self, image_bytes):  # noqa: ARG002
             return ("Tomato_Late_blight", 0.88)
 
-        def predict_grouped(self, image_bytes):  # noqa: ARG002
+        def predict_grouped(self, image_bytes, crop=None):  # noqa: ARG002
             return ("blight", 0.88, "Tomato_Late_blight", 0.88)
 
     app.state.inference = StubInference()

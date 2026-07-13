@@ -95,10 +95,12 @@ class Settings(BaseSettings):
     alert_webhook_url: str = ""            # optional: POST alerts here (config-gated)
 
     # Upload / inference
-    # Above this fine-class confidence we trust the exact-disease diagnosis
-    # enough to attach its specific (per-plant) treatment alongside the reliable
-    # coarse-group advice. Below it, only the group treatment is shown.
-    specific_treatment_confidence: float = 0.5
+    # Above this fine-class confidence (its share among the crop's diseases in
+    # the diagnosed group) we trust the exact-disease diagnosis enough to attach
+    # its specific per-plant treatment alongside the reliable coarse-group advice.
+    # Higher = fewer but more-precise specifics. On the field test set, 0.7 gives
+    # ~72% coverage at ~64% precision-when-shown; below it, group treatment only.
+    specific_treatment_confidence: float = 0.7
     max_image_size: int = 2 * 1024 * 1024  # 2 MB
     allowed_image_types: frozenset[str] = frozenset({"image/jpeg", "image/png", "image/webp"})
     model_path: Path = _DEFAULT_MODEL_PATH

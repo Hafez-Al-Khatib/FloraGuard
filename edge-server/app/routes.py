@@ -33,8 +33,40 @@ from services import (
     TimeSeriesDB,
     TreatmentDB,
     _to_float,
+    crop_of_label,
     utc_now_iso,
 )
+
+_KIND_PREFIXES = ("camera-", "cam-", "controller-", "ctrl-", "soil-")
+
+
+def _zone_of(node_id: str) -> str | None:
+    """Zone key: node id minus its device prefix (camera-zone-a → zone-a)."""
+    for p in _KIND_PREFIXES:
+        if node_id.startswith(p) and len(node_id) > len(p):
+            return node_id[len(p):]
+    return None
+
+
+async def _crop_for_node(cache: Cache, node_id: str) -> str | None:
+    """The crop a node watches: its own profile crop, else inferred from its
+    label/id, else a zone sibling's crop (a camera inherits its soil node's crop).
+    """
+    prof = await cache.get_node_profile(node_id)
+    own = prof.get("crop") or crop_of_label(prof.get("label")) or crop_of_label(node_id)
+    if own:
+        return own
+    zone = _zone_of(node_id)
+    if not zone:
+        return None
+    for n in await cache.list_nodes():
+        if n == node_id or _zone_of(n) != zone:
+            continue
+        p = await cache.get_node_profile(n)
+        sibling = p.get("crop") or crop_of_label(p.get("label")) or crop_of_label(n)
+        if sibling:
+            return sibling
+    return None
 
 logger = structlog.get_logger()
 router = APIRouter(prefix="/api/v1")
@@ -182,10 +214,11 @@ async def receive_camera_frame(
     # upload, so the frame is still buffered for a manual /analyze.
     try:
         inference = get_inference(request)
+        crop = await _crop_for_node(cache, node_id)
         # to_thread: ONNX inference is CPU-bound; running it inline froze the
         # event loop (SSE, telemetry ingest, both engines) for every upload.
         group, gconf, fine, fconf = await asyncio.to_thread(
-            inference.predict_grouped, data
+            inference.predict_grouped, data, crop
         )
         await _record_detection(cache, node_id, group, gconf, fine, fconf)
         await logger.ainfo(
@@ -293,10 +326,11 @@ async def evaluate_crop_health(
             detail="No fresh image found in memory bank.",
         )
 
+    crop = await _crop_for_node(cache, node_id)
     t0 = time.perf_counter()
     try:
         group, gconf, fine, fconf = await asyncio.to_thread(
-            inference.predict_grouped, img_bytes
+            inference.predict_grouped, img_bytes, crop
         )
     except Exception as exc:
         await logger.aerror("inference_failed", node_id=node_id, error=str(exc))
@@ -444,6 +478,12 @@ async def register_node(
         "label": str(body.get("label") or "")[:64],
         "fw": str(body.get("firmware_version") or "")[:32],
     }
+    # Crop the node watches (drives crop-aware disease diagnosis): explicit, else
+    # inferred from the label or id.
+    crop = (str(body.get("crop") or "")[:16]
+            or crop_of_label(body.get("label")) or crop_of_label(node_id))
+    if crop:
+        profile["crop"] = crop
     await cache.register_node(node_id, profile=profile)
     if principal.is_admin:
         # Provisioning bootstrap: issue (or rotate) the node's own token.
@@ -462,6 +502,31 @@ async def register_node(
         "profile": profile,
         "device_token": device_token,
     }
+
+
+@router.put("/node/{node_id}/crop", dependencies=[Depends(require_auth)])
+async def set_node_crop(
+    node_id: str,
+    request: Request,
+    cache: Cache = Depends(get_cache),
+    principal: Principal = Depends(require_auth),
+) -> dict:
+    """Assign the crop a node watches (tomato | potato | pepper), so disease
+    diagnosis is constrained to that crop's classes. `""`/null clears it."""
+    NodeIdPath(node_id=node_id)
+    principal.assert_node(node_id)
+    body = await _json_body(request)
+    raw = str(body.get("crop") or "").strip().lower()
+    if raw and raw not in ("tomato", "potato", "pepper"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="crop must be one of: tomato, potato, pepper (or empty to clear).",
+        )
+    await cache.update_profile(node_id, {"crop": raw})
+    profile = await cache.get_node_profile(node_id)
+    # Push the refreshed profile so the dashboard reflects the crop live.
+    await cache.emit_event("online", node_id, {"profile": profile})
+    return {"node_id": node_id, "crop": raw, "profile": profile}
 
 
 # ---------- device administration (admin token only) ----------

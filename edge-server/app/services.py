@@ -132,6 +132,13 @@ class Cache:
     async def get_node_profile(self, node_id: str) -> dict[str, str]:
         return await self._text_redis().hgetall(f"nodes:profile:{node_id}")
 
+    async def update_profile(self, node_id: str, fields: dict) -> None:
+        """Merge fields into a node's profile without touching last_seen — a
+        config edit (e.g. assigning a crop) is not device contact."""
+        clean = {k: str(v) for k, v in fields.items() if v is not None and v != ""}
+        if clean:
+            await self._text_redis().hset(f"nodes:profile:{node_id}", mapping=clean)
+
     async def get_last_seen(self, node_id: str) -> int | None:
         v = await self._text_redis().get(f"nodes:last_seen:{node_id}")
         return int(v) if v else None
@@ -379,6 +386,28 @@ COARSE_GROUPS: dict[str, tuple[str, ...]] = {
     "pest": ("Tomato_Spider_mites_Two_spotted_spider_mite",),
 }
 GROUP_OF: dict[str, str] = {f: g for g, fs in COARSE_GROUPS.items() for f in fs}
+
+# Crop of each fine class, derived from its label prefix. The node's crop is a
+# CONFIG fact (not a guess), so constraining the fine prediction to the crop's
+# classes eliminates cross-crop confusions (tomato blight vs potato blight) and
+# lifts the specific plant+disease accuracy.
+_CROP_PREFIX = {"pepper": "pepper", "potato": "potato", "tomato": "tomato"}
+
+
+def crop_of_label(text: str | None) -> str | None:
+    """Infer a crop (pepper|potato|tomato) from a free-text label/id, or None."""
+    if not text:
+        return None
+    low = text.lower()
+    for key, crop in _CROP_PREFIX.items():
+        if key in low:
+            return crop
+    return None
+
+
+CROP_OF: dict[str, str] = {
+    f: (crop_of_label(f) or "other") for f in GROUP_OF
+}
 GROUP_DISPLAY: dict[str, str] = {
     "healthy": "Healthy",
     "blight": "Blight",
@@ -487,13 +516,20 @@ class InferenceEngine:
         label = self.labels[best_idx] if 0 <= best_idx < len(self.labels) else "unknown"
         return (label, float(probs[best_idx]))
 
-    def predict_grouped(self, image_bytes: bytes) -> tuple[str, float, str, float]:
+    def predict_grouped(
+        self, image_bytes: bytes, crop: str | None = None
+    ) -> tuple[str, float, str, float]:
         """Coarse diagnosis by summing softmax over each group's fine classes.
 
         Returns (group_key, group_confidence, fine_label, fine_confidence). The
         group is far more accurate in the field than the fine label, so it drives
-        the diagnosis + treatment; the fine label is kept as detail. Falls back to
-        the fine label as its own group for a non-PlantVillage model.
+        the diagnosis + treatment; the fine label is kept as detail.
+
+        When [crop] is known (the node's configured crop), the specific disease is
+        chosen only among that crop's classes within the group — eliminating
+        cross-crop confusion — and [fine_confidence] is renormalized over those
+        candidates (its share among the crop's diseases in this group). Falls back
+        to the fine label as its own group for a non-PlantVillage model.
         """
         if self.session is None:
             return ("model_unavailable", 0.0, "model_unavailable", 0.0)
@@ -506,13 +542,19 @@ class InferenceEngine:
             return (fine, float(probs[best_idx]), fine, float(probs[best_idx]))
         group_probs = {g: float(probs[idx].sum()) for g, idx in self._group_indices.items()}
         group = max(group_probs, key=group_probs.__getitem__)
-        # Most likely exact disease WITHIN the chosen group (consistent with it),
-        # not the global argmax which can land in a different group. Its absolute
-        # softmax prob is the gate for whether we trust per-disease treatment.
-        gidx = self._group_indices[group]
-        best_in_group = gidx[int(np.argmax([probs[i] for i in gidx]))]
-        fine = self.labels[best_in_group]
-        fine_conf = float(probs[best_in_group])
+        # Candidate fine classes: the group's classes, narrowed to the node's crop
+        # when known (and when the crop actually has a class in this group).
+        candidates = list(self._group_indices[group])
+        if crop:
+            crop_cands = [i for i in candidates if CROP_OF.get(self.labels[i]) == crop]
+            if crop_cands:
+                candidates = crop_cands
+        sub = np.array([probs[i] for i in candidates], dtype=np.float64)
+        best = candidates[int(np.argmax(sub))]
+        fine = self.labels[best]
+        # Confidence among the candidates (how sure it's THIS disease vs the
+        # other options for this crop+group) — the meaningful gate for treatment.
+        fine_conf = float(sub.max() / sub.sum())
         return (group, group_probs[group], fine, fine_conf)
 
     @staticmethod

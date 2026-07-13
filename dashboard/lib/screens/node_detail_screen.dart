@@ -1011,6 +1011,16 @@ class _DiagnosticsPanel extends StatelessWidget {
           const SectionLabel('Firmware & Pairing'),
           const SizedBox(height: AppSpace.md),
           _kv('Kind', profile['kind'] ?? '—'),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('CROP', style: AppText.monoCaption),
+                _CropPicker(nodeId: snapshot.nodeId, current: profile['crop']),
+              ],
+            ),
+          ),
           _kv('Label', profile['label']?.isNotEmpty == true
               ? profile['label']!
               : '—'),
@@ -1037,4 +1047,69 @@ class _DiagnosticsPanel extends StatelessWidget {
           ],
         ),
       );
+}
+
+/// Assigns the crop a node watches. Crop-aware diagnosis constrains the disease
+/// to that crop's classes, lifting the specific plant+disease accuracy. Applies
+/// to the next analysis.
+class _CropPicker extends StatefulWidget {
+  final String nodeId;
+  final String? current;
+  const _CropPicker({required this.nodeId, this.current});
+
+  @override
+  State<_CropPicker> createState() => _CropPickerState();
+}
+
+class _CropPickerState extends State<_CropPicker> {
+  static const _crops = ['tomato', 'potato', 'pepper'];
+  String? _crop;
+
+  @override
+  void initState() {
+    super.initState();
+    _crop = _crops.contains(widget.current) ? widget.current : null;
+  }
+
+  Future<void> _set(String? c) async {
+    final api = context.read<AppState>().api;
+    if (api == null) return;
+    setState(() => _crop = c);
+    try {
+      await api.setNodeCrop(widget.nodeId, c ?? '');
+      if (mounted) {
+        showAppToast(context, 'Crop set to ${c ?? 'none'} — re-analyze to apply');
+      }
+    } catch (e) {
+      if (mounted) showAppToast(context, 'Failed to set crop: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpace.sm),
+      decoration: BoxDecoration(
+        color: AppColors.insetFill,
+        border: Border.all(color: AppColors.glassBorder),
+      ),
+      child: DropdownButtonHideUnderline(
+        child: DropdownButton<String?>(
+          value: _crop,
+          isDense: true,
+          dropdownColor: AppColors.bgLift,
+          borderRadius: BorderRadius.zero,
+          icon: const Icon(Icons.expand_more, size: 16, color: AppColors.textSecondary),
+          hint: Text('SET', style: AppText.monoCaption),
+          style: AppText.monoValue,
+          items: [
+            DropdownMenuItem(value: null, child: Text('NONE', style: AppText.monoValue)),
+            for (final c in _crops)
+              DropdownMenuItem(value: c, child: Text(c.toUpperCase(), style: AppText.monoValue)),
+          ],
+          onChanged: _set,
+        ),
+      ),
+    );
+  }
 }

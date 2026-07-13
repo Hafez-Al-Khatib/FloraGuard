@@ -62,9 +62,23 @@ def test_predict_grouped_returns_group_and_fine():
     assert group in COARSE_GROUPS
     assert fine in settings.class_labels
     assert 0.0 <= gconf <= 1.0
-    # The group's summed softmax includes the argmax fine class, so it can only
-    # be >= that fine class's probability.
-    assert gconf >= fconf - 1e-6
+    # fine_confidence is renormalized within the candidate diseases, so it's a
+    # valid probability but no longer bounded by the group confidence.
+    assert 0.0 <= fconf <= 1.0
+
+
+def test_predict_grouped_crop_constrains_fine():
+    """A known crop restricts the specific disease to that crop's classes."""
+    from services import COARSE_GROUPS, CROP_OF
+
+    settings = Settings()
+    engine = InferenceEngine(settings)
+    if engine.session is None:
+        pytest.skip("ONNX model file not available in this environment")
+    _, _, fine, _ = engine.predict_grouped(_make_jpeg(), crop="tomato")
+    # With a tomato crop, the specific disease must be a tomato class (unless the
+    # diagnosed group has no tomato class, which none of ours lack).
+    assert CROP_OF.get(fine) in ("tomato", None) or fine in COARSE_GROUPS
 
 
 # ---------- TreatmentDB ----------

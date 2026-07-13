@@ -193,6 +193,12 @@ class ApiService {
     return _sendJson('POST', '/zone/$zone/command', body: {'action': action});
   }
 
+  /// Assign the crop a node watches (tomato|potato|pepper, or "" to clear), so
+  /// disease diagnosis is constrained to that crop's classes.
+  Future<Map<String, dynamic>> setNodeCrop(String nodeId, String crop) {
+    return _sendJson('PUT', '/node/$nodeId/crop', body: {'crop': crop});
+  }
+
   Future<Map<String, dynamic>> fetchAutomationConfig() {
     return _getJson('/automation/config');
   }
