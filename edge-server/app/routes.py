@@ -19,7 +19,9 @@ from schemas import (
     ChatQuery,
     DiagnosticResult,
     NodeIdPath,
+    SpecificDiagnosis,
     TelemetryPayload,
+    TreatmentOption,
 )
 from services import (
     AgronomistChat,
@@ -253,6 +255,23 @@ async def _record_detection(
     return detected_at
 
 
+def _specific_diagnosis(fine: str, fine_conf: float) -> SpecificDiagnosis | None:
+    """The exact-disease diagnosis + its per-plant treatment, surfaced only when
+    the fine-class confidence clears the bar (else None). The coarse group is
+    always shown; this is the confident, specific add-on from the fine DB.
+    """
+    if fine_conf < get_settings().specific_treatment_confidence:
+        return None
+    treatments = TreatmentDB.treatments_for(fine)
+    if treatments is None:  # healthy/unknown fine class → no specific treatment
+        return None
+    return SpecificDiagnosis(
+        label=fine,
+        confidence=fine_conf,
+        treatments=[TreatmentOption(**t) for t in treatments],
+    )
+
+
 @router.get(
     "/node/{node_id}/analyze",
     response_model=CameraAnalysisResponse,
@@ -292,14 +311,17 @@ async def evaluate_crop_health(
     # auto-analyze on /upload-frame).
     await _record_detection(cache, node_id, group, gconf, fine, fconf)
 
-    # Treatment recommendations for the diagnosed group (None when healthy).
+    # Treatment recommendations for the diagnosed group (None when healthy),
+    # plus the exact-disease treatment when the model is confident enough.
     treatments = TreatmentDB.treatments_for_group(group)
+    specific = _specific_diagnosis(fine, fconf)
 
     return CameraAnalysisResponse(
         node_id=node_id,
         anomalies=diagnostic,
         inference_ms=inference_ms,
         treatments=treatments,
+        specific=specific,
     )
 
 
@@ -340,6 +362,10 @@ async def latest_diagnostics(
     # No group cached yet (no detection) → treat as healthy/none.
     healthy = not group or TreatmentDB.is_healthy_group(group)
     treatments = TreatmentDB.treatments_for_group(group) if group else None
+    # Exact-disease treatment from the fine DB, when the cached fine confidence
+    # cleared the bar at detection time.
+    fine = diag.get("fine", "")
+    specific = _specific_diagnosis(fine, diag.get("fine_confidence", 0.0)) if fine else None
     return {
         "node_id": node_id,
         "issue": issue,
@@ -347,7 +373,8 @@ async def latest_diagnostics(
         "timestamp": diag.get("timestamp"),
         "healthy": healthy,
         "treatments": treatments,
-        "fine": diag.get("fine", ""),
+        "fine": fine,
+        "specific": specific.model_dump() if specific else None,
     }
 
 

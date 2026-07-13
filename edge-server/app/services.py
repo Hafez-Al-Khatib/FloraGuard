@@ -500,13 +500,19 @@ class InferenceEngine:
         probs = self._infer_probs(image_bytes)
         if probs is None:
             return ("unknown_format", 0.0, "unknown_format", 0.0)
-        best_idx = int(np.argmax(probs))
-        fine = self.labels[best_idx] if 0 <= best_idx < len(self.labels) else "unknown"
-        fine_conf = float(probs[best_idx])
         if not self._group_indices:
-            return (fine, fine_conf, fine, fine_conf)
+            best_idx = int(np.argmax(probs))
+            fine = self.labels[best_idx] if 0 <= best_idx < len(self.labels) else "unknown"
+            return (fine, float(probs[best_idx]), fine, float(probs[best_idx]))
         group_probs = {g: float(probs[idx].sum()) for g, idx in self._group_indices.items()}
         group = max(group_probs, key=group_probs.__getitem__)
+        # Most likely exact disease WITHIN the chosen group (consistent with it),
+        # not the global argmax which can land in a different group. Its absolute
+        # softmax prob is the gate for whether we trust per-disease treatment.
+        gidx = self._group_indices[group]
+        best_in_group = gidx[int(np.argmax([probs[i] for i in gidx]))]
+        fine = self.labels[best_in_group]
+        fine_conf = float(probs[best_in_group])
         return (group, group_probs[group], fine, fine_conf)
 
     @staticmethod

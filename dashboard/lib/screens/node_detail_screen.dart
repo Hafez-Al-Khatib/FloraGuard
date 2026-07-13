@@ -687,6 +687,9 @@ class _VisionPanelState extends State<_VisionPanel>
   Uint8List? _image;
   bool _loadingImage = true;
   List<dynamic>? _treatments;
+  // The confident exact-disease diagnosis + its specific treatment, when the
+  // backend deemed the fine label reliable enough (else null → group only).
+  Map<String, dynamic>? _specific;
 
   late final AnimationController _scan = AnimationController(
     vsync: this,
@@ -724,6 +727,7 @@ class _VisionPanelState extends State<_VisionPanel>
       _image = img;
       _loadingImage = false;
       _treatments = diag?['treatments'] as List<dynamic>?;
+      _specific = diag?['specific'] as Map<String, dynamic>?;
     });
     // Sweep once the frame is on screen.
     if (_image != null) _scan.forward(from: 0);
@@ -799,13 +803,60 @@ class _VisionPanelState extends State<_VisionPanel>
             Text('NO DETECTION YET', style: AppText.monoCaption),
           if (_treatments != null && _treatments!.isNotEmpty) ...[
             const TechnicalDivider(),
-            const SectionLabel('Recommended Treatment'),
+            SectionLabel(_specific != null
+                ? 'Group Treatment // ${s.detectionShort}'
+                : 'Recommended Treatment'),
             const SizedBox(height: AppSpace.sm),
             for (final t in _treatments!)
               _TreatmentBlock(treatment: t as Map<String, dynamic>),
           ],
+          if (_specific != null) _SpecificTreatment(specific: _specific!),
         ],
       ),
+    );
+  }
+}
+
+/// The confident exact-disease diagnosis and its per-plant treatment, shown
+/// beneath the reliable group advice. Flagged "if confirmed" — it rides on the
+/// less-certain fine label, so it's a targeted suggestion, not the headline.
+class _SpecificTreatment extends StatelessWidget {
+  final Map<String, dynamic> specific;
+  const _SpecificTreatment({required this.specific});
+
+  static String _pretty(String raw) => raw
+      .replaceAll(RegExp(r'[_]+'), ' ')
+      .trim()
+      .split(' ')
+      .where((w) => w.isNotEmpty)
+      .map((w) => w[0].toUpperCase() + w.substring(1).toLowerCase())
+      .join(' ');
+
+  @override
+  Widget build(BuildContext context) {
+    final label = _pretty(specific['label'] as String? ?? '');
+    final conf = ((specific['confidence'] as num?) ?? 0) * 100;
+    final treatments =
+        (specific['treatments'] as List<dynamic>? ?? const []);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const TechnicalDivider(),
+        Row(
+          children: [
+            Expanded(child: SectionLabel('Most Likely // $label')),
+            Text('${conf.toStringAsFixed(0)}%',
+                style: AppText.monoCaption.copyWith(color: AppColors.warning)),
+          ],
+        ),
+        const SizedBox(height: AppSpace.xs),
+        Text('IF CONFIRMED — SPECIFIC TREATMENT',
+            style: AppText.monoCaption
+                .copyWith(fontSize: 9, letterSpacing: 1.2)),
+        const SizedBox(height: AppSpace.sm),
+        for (final t in treatments)
+          _TreatmentBlock(treatment: t as Map<String, dynamic>),
+      ],
     );
   }
 }

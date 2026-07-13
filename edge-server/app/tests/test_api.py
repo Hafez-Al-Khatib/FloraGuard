@@ -109,6 +109,46 @@ async def test_analyze_healthy_attaches_no_treatments(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_analyze_confident_specific_attaches_exact_treatment(client: AsyncClient):
+    """When the fine class is confident, the exact-disease treatment rides along
+    with the reliable coarse-group diagnosis."""
+    mock_cache = AsyncMock()
+    mock_cache.get_camera_frame = AsyncMock(return_value=b"\xff\xd8\xff x")
+    mock_cache.set_camera_diagnostics = AsyncMock()
+    mock_cache.log_automation_decision = AsyncMock()
+    app.dependency_overrides[get_cache] = lambda: mock_cache
+
+    class StubInference:
+        def predict_grouped(self, image_bytes):  # noqa: ARG002
+            return ("blight", 0.90, "Tomato_Late_blight", 0.80)  # fine 0.80 >= 0.5
+
+    app.dependency_overrides[get_inference] = lambda: StubInference()
+    body = (await client.get("/api/v1/node/cam-01/analyze", headers=AUTH)).json()
+    assert body["anomalies"]["issue"] == "Blight"  # group headline unchanged
+    assert body["specific"]["label"] == "Tomato_Late_blight"
+    assert body["specific"]["treatments"]
+
+
+@pytest.mark.anyio
+async def test_analyze_low_specific_confidence_is_group_only(client: AsyncClient):
+    """Below the bar, only the safe group treatment shows — no risky specific."""
+    mock_cache = AsyncMock()
+    mock_cache.get_camera_frame = AsyncMock(return_value=b"\xff\xd8\xff x")
+    mock_cache.set_camera_diagnostics = AsyncMock()
+    mock_cache.log_automation_decision = AsyncMock()
+    app.dependency_overrides[get_cache] = lambda: mock_cache
+
+    class StubInference:
+        def predict_grouped(self, image_bytes):  # noqa: ARG002
+            return ("blight", 0.60, "Tomato_Late_blight", 0.30)  # fine 0.30 < 0.5
+
+    app.dependency_overrides[get_inference] = lambda: StubInference()
+    body = (await client.get("/api/v1/node/cam-01/analyze", headers=AUTH)).json()
+    assert body["treatments"]  # group treatment present
+    assert body["specific"] is None
+
+
+@pytest.mark.anyio
 async def test_list_nodes(client: AsyncClient):
     mock_cache = AsyncMock()
     mock_cache.list_nodes = AsyncMock(return_value=["cam-01", "soil-01"])

@@ -33,11 +33,22 @@ class TreatmentOption(BaseModel):
     actions: list[str] = Field(..., description="List of actionable steps")
 
 
+class SpecificDiagnosis(BaseModel):
+    """Most-likely exact disease within the coarse group, surfaced only when the
+    model clears the specific-confidence bar. Carries the per-disease treatment
+    from the fine-grained TreatmentDB."""
+    label: str
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    treatments: list[TreatmentOption] | None = None
+
+
 class CameraAnalysisResponse(BaseModel):
     node_id: str
     anomalies: DiagnosticResult | None
     inference_ms: float
     treatments: list[TreatmentOption] | None = None
+    # The specific disease + its treatment, when confidence warrants it.
+    specific: SpecificDiagnosis | None = None
 
 
 class ChatQuery(BaseModel):

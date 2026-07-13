@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     alert_webhook_url: str = ""            # optional: POST alerts here (config-gated)
 
     # Upload / inference
+    # Above this fine-class confidence we trust the exact-disease diagnosis
+    # enough to attach its specific (per-plant) treatment alongside the reliable
+    # coarse-group advice. Below it, only the group treatment is shown.
+    specific_treatment_confidence: float = 0.5
     max_image_size: int = 2 * 1024 * 1024  # 2 MB
     allowed_image_types: frozenset[str] = frozenset({"image/jpeg", "image/png", "image/webp"})
     model_path: Path = _DEFAULT_MODEL_PATH
