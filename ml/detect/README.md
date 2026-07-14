@@ -10,15 +10,16 @@ disease), reusing the same group/crop/treatment stack as the classifier.
 ```bash
 pip install -r ml/requirements.txt      # adds ultralytics
 
-# 1. Get PlantDoc DETECTION data (VOC-XML boxes) into datasets/plantdoc_detect/
-#    The detection release has images + *.xml (Pascal VOC). Sources:
-#      - https://github.com/pratikkayal/PlantDoc-Dataset (detection branch/annotations)
-#      - or the PlantDoc detection dataset on Kaggle/Roboflow (export as "Pascal VOC")
-#    Any tree of images + matching .xml works — the converter rglobs for *.xml.
+# 1. Get PlantDoc DETECTION data into datasets/plantdoc_detect/
+#    EASIEST: Roboflow Universe → search "PlantDoc" → Download → "YOLOv8" (or
+#    "COCO"), unzip into datasets/plantdoc_detect/. Pascal-VOC (*.xml) also works.
+#    The converter auto-detects VOC / Roboflow-YOLO / COCO — no need to pick.
 
-# 2. Convert VOC → YOLO (drops non tomato/potato/pepper classes)
+# 2. Convert → YOLO in OUR class order (remaps any format, drops other crops)
 python ml/detect/plantdoc_to_yolo.py \
     --src datasets/plantdoc_detect --out datasets/plantdoc_yolo
+#    Prints boxes-per-class; if it maps 0 boxes, the class names don't match —
+#    check ml/detect/labels.py PLANTDOC_TO_DET against your data's names.
 
 # 3. Train (bigger --model is the first lever if the gate fails)
 python ml/detect/train_detector.py \
