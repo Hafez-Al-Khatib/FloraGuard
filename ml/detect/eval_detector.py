@@ -68,6 +68,19 @@ def _load_gt(label_path: Path, w: int, h: int) -> list[tuple[int, np.ndarray]]:
     return out
 
 
+def _group_nms(boxes: list[np.ndarray], confs: list[float], iou_thres: float = 0.5):
+    """Greedy NMS within one (remapped) class. Returns (box, conf) kept, high→low.
+
+    Essential after a class remap: two fine boxes on the same object become the
+    same group and must be merged, else the extra one is a false positive."""
+    order = sorted(range(len(confs)), key=lambda i: -confs[i])
+    kept = []
+    for i in order:
+        if all(_iou(boxes[i], boxes[j]) < iou_thres for j, _ in kept):
+            kept.append((i, confs[i]))
+    return [(boxes[i], c) for i, c in kept]
+
+
 def _map_at50(model, images: list[Path], labels_dir: Path,
               classes: list[str], remap) -> float:
     """Custom mAP@50 over `classes`, remapping DET_CLASSES idx via `remap`."""
@@ -82,25 +95,32 @@ def _map_at50(model, images: list[Path], labels_dir: Path,
             gc = remap(cidx)
             gt_by[gc].append([box, False]); n_gt[gc] += 1
         res = model.predict(str(img_path), conf=0.001, iou=0.6, verbose=False)[0]
-        preds = []
+        # Group predictions by remapped class, then NMS within each so co-located
+        # boxes that collapsed to the same class don't double-count.
+        by_cls: dict[str, list] = {c: [] for c in classes}
         for b in res.boxes:
-            preds.append((float(b.conf[0]), remap(int(b.cls[0])), b.xyxy[0].cpu().numpy()))
-        preds.sort(key=lambda x: -x[0])
-        for conf, gc, box in preds:
-            best_iou, best_j = 0.0, -1
-            for j, (gbox, used) in enumerate(gt_by[gc]):
-                if used:
-                    continue
-                i = _iou(box, gbox)
-                if i > best_iou:
-                    best_iou, best_j = i, j
-            tp = 1 if best_iou >= 0.5 and best_j >= 0 else 0
-            if tp:
-                gt_by[gc][best_j][1] = True
-            dets[gc]["conf"].append(conf); dets[gc]["tp"].append(tp)
-    aps = [_ap(dets[c]["conf"], dets[c]["tp"], n_gt[c]) for c in classes]
-    aps = [a for a in aps if not np.isnan(a)]
-    return float(np.mean(aps)) if aps else 0.0
+            gc = remap(int(b.cls[0]))
+            by_cls[gc].append((float(b.conf[0]), b.xyxy[0].cpu().numpy()))
+        for gc in classes:
+            if not by_cls[gc]:
+                continue
+            confs = [c for c, _ in by_cls[gc]]
+            boxes = [bx for _, bx in by_cls[gc]]
+            for box, conf in _group_nms(boxes, confs):
+                best_iou, best_j = 0.0, -1
+                for j, (gbox, used) in enumerate(gt_by[gc]):
+                    if used:
+                        continue
+                    i = _iou(box, gbox)
+                    if i > best_iou:
+                        best_iou, best_j = i, j
+                tp = 1 if best_iou >= 0.5 and best_j >= 0 else 0
+                if tp:
+                    gt_by[gc][best_j][1] = True
+                dets[gc]["conf"].append(conf); dets[gc]["tp"].append(tp)
+    per_class = {c: _ap(dets[c]["conf"], dets[c]["tp"], n_gt[c]) for c in classes}
+    aps = [a for a in per_class.values() if not np.isnan(a)]
+    return (float(np.mean(aps)) if aps else 0.0), per_class
 
 
 def main() -> int:
@@ -121,13 +141,22 @@ def main() -> int:
     root = Path(cfg["path"])
     images = sorted((root / "images" / args.split).glob("*"))
     labels_dir = root / "labels" / args.split
-    group_idx = {g: i for i, g in enumerate(GROUP_CLASSES)}
-    group_map = _map_at50(model, images, labels_dir, GROUP_CLASSES,
-                          lambda cidx: det_group(DET_CLASSES[cidx]))
+
+    group_map, group_ap = _map_at50(
+        model, images, labels_dir, GROUP_CLASSES,
+        lambda cidx: det_group(DET_CLASSES[cidx]))
+    # Sanity cross-check: my own fine mAP should track ultralytics' — if it does,
+    # the (same-method) group number is trustworthy.
+    my_fine, _ = _map_at50(model, images, labels_dir, DET_CLASSES, lambda cidx: DET_CLASSES[cidx])
 
     print(f"\n{'':22s} mAP@50")
-    print(f"{'fine (15-class)':22s} {fine_map:.3f}   (gate >= {args.fine_gate})")
+    print(f"{'fine (ultralytics)':22s} {fine_map:.3f}   (gate >= {args.fine_gate})")
+    print(f"{'fine (self-check)':22s} {my_fine:.3f}   (should ~match above)")
     print(f"{'group (5-class)':22s} {group_map:.3f}   (gate >= {args.group_gate})")
+    print("\nper-group AP@50:")
+    for g in GROUP_CLASSES:
+        v = group_ap[g]
+        print(f"  {g:12s} {'n/a' if v != v else f'{v:.3f}'}")
     ok = group_map >= args.group_gate and fine_map >= args.fine_gate
     print(f"\nGATE: {'PASS — proceed to deploy the detector' if ok else 'FAIL — do NOT ship; iterate (bigger model / more data / captures)'}")
     return 0 if ok else 2
