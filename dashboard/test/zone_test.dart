@@ -75,4 +75,31 @@ void main() {
       expect(mains.isOffline, isFalse);
     });
   });
+
+  group('applyEvent detection last_seen', () {
+    test('a detection event with last_seen advances the clock', () {
+      final stale = TelemetrySnapshot(nodeId: 'camera-zone-a', lastSeen: 100);
+      final fresh = stale.applyEvent('detection', {
+        'issue': 'Late Blight',
+        'confidence': 0.9,
+        'detections': [],
+        'last_seen': 999,
+      });
+      // Real device contact (an /upload-frame auto-analyze) must update the
+      // card's "LAST CONTACT" — this was the bug: it never advanced.
+      expect(fresh.lastSeen, 999);
+    });
+
+    test('a detection event without last_seen (manual /analyze) leaves it alone', () {
+      final stale = TelemetrySnapshot(nodeId: 'camera-zone-a', lastSeen: 100);
+      final replayed = stale.applyEvent('detection', {
+        'issue': 'Late Blight',
+        'confidence': 0.9,
+        'detections': [],
+      });
+      // A human re-analyzing an already-cached frame is not new device
+      // contact, so it must not fake liveness.
+      expect(replayed.lastSeen, 100);
+    });
+  });
 }

@@ -214,6 +214,12 @@ async def receive_camera_frame(
         )
 
     await cache.set_camera_frame(node_id, data)
+    # This is genuine live device contact (an authenticated node just uploaded
+    # fresh bytes over HTTP — unlike a retained MQTT message, there's no stale
+    # replay concern here), so it must refresh last_seen. Without this the card
+    # shows "LAST CONTACT Nh AGO" forever after the first pairing, even while
+    # the camera keeps uploading and updating its diagnosis live.
+    await cache.touch_node(node_id)
 
     # Auto-analyze: a camera node is a dumb capture device, so the edge runs
     # inference on every uploaded frame and records the detection. The ESP32-CAM
@@ -279,10 +285,17 @@ async def _record_detection(cache: Cache, node_id: str, detections: list[dict]) 
     # Write-once: a detection on a node that also reports soil telemetry must
     # not flip its profile to "camera" (that hides its irrigation controls).
     await cache.note_node_seen(node_id, default_profile={"kind": "camera"})
+    # This event fires for both a live device upload (/upload-frame, which just
+    # bumped last_seen) and a human-triggered re-analysis of an already-cached
+    # frame (/analyze, which does not — no new device contact happened). Rather
+    # than the client guessing "a detection means alive", it echoes back the
+    # cache's true last_seen so the client only advances the clock on real
+    # contact, never on a manual re-analyze of stale footage.
+    last_seen = await cache.get_last_seen(node_id)
     await cache.emit_event(
         "detection", node_id,
         {"issue": issue, "confidence": confidence, "group": group,
-         "detections": detections, "at": detected_at},
+         "detections": detections, "at": detected_at, "last_seen": last_seen},
     )
     # Safety-first automation: log a suggestion, never actuate without confirmation.
     if dom is not None and not TreatmentDB.is_healthy_group(group) and confidence > 0.70:

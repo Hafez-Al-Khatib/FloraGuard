@@ -616,8 +616,10 @@ async def test_upload_frame_auto_analyzes(client: AsyncClient):
     mock_cache.set_camera_frame = AsyncMock()
     mock_cache.set_camera_diagnostics = AsyncMock()
     mock_cache.register_node = AsyncMock()
+    mock_cache.touch_node = AsyncMock()
     mock_cache.emit_event = AsyncMock()
     mock_cache.log_automation_decision = AsyncMock()
+    mock_cache.get_last_seen = AsyncMock(return_value=1_700_000_000)
     app.dependency_overrides[get_cache] = lambda: mock_cache
 
     class StubInference:
@@ -642,6 +644,13 @@ async def test_upload_frame_auto_analyzes(client: AsyncClient):
     mock_cache.note_node_seen.assert_awaited()
     mock_cache.register_node.assert_not_awaited()
     mock_cache.log_automation_decision.assert_awaited_once()
+    # A frame upload is genuine live device contact — last_seen must advance,
+    # and the SSE detection event must echo it so clients don't have to guess
+    # whether a "detection" means the device is actually alive right now.
+    mock_cache.touch_node.assert_awaited_once_with("cam-esp32-a")
+    detection_call = mock_cache.emit_event.await_args_list[-1]
+    assert detection_call.args[0] == "detection"
+    assert detection_call.args[2]["last_seen"] == 1_700_000_000
 
 
 @pytest.mark.anyio

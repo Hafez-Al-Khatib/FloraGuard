@@ -315,6 +315,12 @@ class TelemetrySnapshot {
               ? DateTime.tryParse(payload['at'] as String)
               : null,
           detections: DetectionBox.listFrom(payload['detections']),
+          // The server only includes last_seen when this detection came from a
+          // live device upload, not a human-triggered re-analysis of a cached
+          // frame — so trust it when present instead of stamping DateTime.now()
+          // (which would be wrong for a manual /analyze) or leaving it stale
+          // (which is the bug: a live camera's "LAST CONTACT" never advancing).
+          lastSeen: (payload['last_seen'] as num?)?.toInt() ?? lastSeen,
           updateTick: updateTick + 1,
         );
       case 'actuator':
