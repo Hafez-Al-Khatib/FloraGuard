@@ -930,27 +930,55 @@ class _ZonePanel extends StatelessWidget {
           ),
           const SizedBox(height: AppSpace.md),
           if (showSoil) ...[
-            Row(
-              children: [
-                Expanded(child: _Stat(label: 'Soil Moisture', value: peer.moisture, unit: '%')),
-                Expanded(child: _Stat(label: 'EC', value: peer.ec, unit: 'mS/cm')),
-              ],
-            ),
-            const TechnicalDivider(),
-            Row(
-              children: [
-                Expanded(
-                  child: peer.isMains
-                      ? const _Stat(label: 'Power // Mains', value: 100, unit: '%')
-                      : _Stat(label: 'Battery', value: peer.batteryPct, unit: '%'),
-                ),
-                const Expanded(child: SizedBox()),
-              ],
-            ),
+            if (peer.isOffline)
+              _soilOffline()
+            else ...[
+              Row(
+                children: [
+                  Expanded(child: _Stat(label: 'Soil Moisture', value: peer.moisture, unit: '%')),
+                  Expanded(child: _Stat(label: 'EC', value: peer.ec, unit: 'mS/cm')),
+                ],
+              ),
+              const TechnicalDivider(),
+              Row(
+                children: [
+                  Expanded(
+                    child: peer.isMains
+                        ? const _Stat(label: 'Power // Mains', value: 100, unit: '%')
+                        : _Stat(label: 'Battery', value: peer.batteryPct, unit: '%'),
+                  ),
+                  const Expanded(child: SizedBox()),
+                ],
+              ),
+            ],
           ] else
             _visionSummary(),
         ],
       ),
+    );
+  }
+
+  /// Explicit offline state for the linked soil node. Shown instead of the
+  /// readings grid when the peer has gone dark, so a dead sensor is not
+  /// mistaken for a healthy mains-powered node (both have a null battery).
+  Widget _soilOffline() {
+    final age = peer.ageSeconds;
+    final last = age == null
+        ? 'NO TELEMETRY RECEIVED'
+        : age < 3600
+            ? 'LAST CONTACT ${(age / 60).floor()} MIN AGO'
+            : age < 86400
+                ? 'LAST CONTACT ${(age / 3600).floor()} H AGO'
+                : 'LAST CONTACT ${(age / 86400).floor()} D AGO';
+    return Row(
+      children: [
+        const Icon(Icons.cloud_off, size: 14, color: AppColors.warning),
+        const SizedBox(width: AppSpace.sm),
+        Expanded(
+          child: Text('SOIL NODE OFFLINE // $last',
+              style: AppText.monoCaption.copyWith(color: AppColors.warning)),
+        ),
+      ],
     );
   }
 

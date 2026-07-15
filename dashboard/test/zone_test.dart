@@ -46,4 +46,33 @@ void main() {
       expect(linkedPeer([cam, otherSoil], cam, wantSoil: true)?.nodeId, isNull);
     });
   });
+
+  group('isOffline', () {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+
+    test('no readings at all is offline', () {
+      // A paired-but-silent node: values expired from the cache.
+      expect(TelemetrySnapshot(nodeId: 'soil-zone-a').isOffline, isTrue);
+    });
+
+    test('fresh readings are not offline', () {
+      final live = TelemetrySnapshot(
+          nodeId: 'soil-zone-a', moisture: 42, lastSeen: now);
+      expect(live.isOffline, isFalse);
+    });
+
+    test('stale contact is offline even with lingering readings', () {
+      final stale = TelemetrySnapshot(
+          nodeId: 'soil-zone-a', moisture: 42, lastSeen: now - 600);
+      expect(stale.isOffline, isTrue);
+    });
+
+    test('a live mains node (null battery) is not offline', () {
+      // Mains-powered soil node: no battery reading, but moisture is live.
+      final mains = TelemetrySnapshot(
+          nodeId: 'soil-zone-a', moisture: 30, lastSeen: now);
+      expect(mains.isMains, isTrue);
+      expect(mains.isOffline, isFalse);
+    });
+  });
 }

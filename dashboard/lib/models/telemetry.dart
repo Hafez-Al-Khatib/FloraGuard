@@ -200,6 +200,13 @@ class TelemetrySnapshot {
     return age != null && age > 300;
   }
 
+  /// True when the node has effectively gone dark: either no live readings at
+  /// all (values expired from the cache) or last contact is past the stale
+  /// threshold. The zone panel uses this to show an explicit "offline" state
+  /// instead of a blank readout that reads as healthy — a mains node and an
+  /// offline node both have a null battery, so blank alone is ambiguous.
+  bool get isOffline => !hasReadings || isStale;
+
   /// True if we have at least one numeric reading. Placeholder cards return false.
   bool get hasReadings =>
       moisture != null ||
