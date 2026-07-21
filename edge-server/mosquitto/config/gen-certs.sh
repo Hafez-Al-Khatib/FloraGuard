@@ -44,7 +44,7 @@ DNS.1 = $CN
 DNS.2 = localhost
 DNS.3 = mosquitto
 IP.1 = 127.0.0.1
-IP.2 = 10.55.152.203
+IP.2 = 192.168.10.100
 EXT
 if [ -n "$EXTRA_IP" ]; then
   echo "IP.3 = $EXTRA_IP" >> server.ext
