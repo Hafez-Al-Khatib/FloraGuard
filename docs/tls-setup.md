@@ -37,6 +37,7 @@ openssl x509 -req -in node-01.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
 
 - **Flutter web dashboard browsers:** Accept the self-signed certificate exception, or install `ca.crt` into the OS trust store.
 - **ESP32 nodes:** Embed `ca.crt` as a PEM constant and configure `WiFiClientSecure.setCACert(...)`.
+  (Implemented in `firmware/soil-node/src/main.cpp` — see `MQTT_CA_CERT` in its `secrets.h.example`.)
 - **Production:** Replace the self-signed CA with a customer-managed internal CA or certificates from a trusted public CA.
 
 ## Mosquitto mTLS (optional enhancement)

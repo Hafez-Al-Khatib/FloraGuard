@@ -31,6 +31,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <ESPmDNS.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
@@ -77,8 +78,11 @@ static const char *reset_reason_str() {
 }
 
 // ---------- Globals ----------
-WiFiClient   wifi_client;
-PubSubClient mqtt_client(wifi_client);
+// TLS client: the production broker only exposes a TLS listener on 8883.
+// Chain validation against the CA in secrets.h (hostname is NOT checked —
+// nodes connect by mDNS-resolved IP, the cert CN is plant-hub.local).
+WiFiClientSecure wifi_client;
+PubSubClient     mqtt_client(wifi_client);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Analog moisture read
@@ -157,6 +161,7 @@ IPAddress resolve_edge_ip() {
 // MQTT
 // ─────────────────────────────────────────────────────────────────────────────
 bool mqtt_connect() {
+    wifi_client.setCACert(MQTT_CA_CERT);
     mqtt_client.setServer(resolve_edge_ip(), MQTT_PORT);
     mqtt_client.setKeepAlive(15);
 
