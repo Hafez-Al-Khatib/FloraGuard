@@ -11,7 +11,7 @@ openssl req -x509 -newkey rsa:4096 \
   -out    "$CERT_DIR/server.crt" \
   -sha256 -days 365 -nodes \
   -subj "/C=US/ST=Dev/L=Dev/O=PlantMonitorSystem/CN=plant-hub.local" \
-  -addext "subjectAltName=DNS:plant-hub.local,DNS:localhost,IP:127.0.0.1,IP:192.168.10.100"
+  -addext "subjectAltName=DNS:plant-hub.local,DNS:localhost,IP:127.0.0.1,IP:10.55.152.203,IP:192.168.10.100"
 
 chmod 600 "$CERT_DIR/server.key"
 

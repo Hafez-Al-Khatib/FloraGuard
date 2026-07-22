@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     # pydantic-settings JSON-decoding a list env value, then exposed as a parsed
     # list via the property below. A wildcard "*" is intentionally not allowed.
     cors_allow_origins_raw: str = Field(
-        default="https://plant-hub.local,https://192.168.10.100",
+        default="https://plant-hub.local,https://10.55.152.203,https://192.168.10.100",
         validation_alias="CORS_ALLOW_ORIGINS",
     )
 

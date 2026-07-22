@@ -100,7 +100,7 @@ services:
       - INFLUXDB_BUCKET=${INFLUXDB_BUCKET:-telemetry}
       - API_AUTH_TOKEN=${API_AUTH_TOKEN}
       - ENVIRONMENT=production
-      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://plant-hub.local,https://192.168.10.100}
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://plant-hub.local,https://10.55.152.203,https://192.168.10.100}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       # Chat provider (the only outbound internet call in the system)
       - CHAT_PROVIDER=${CHAT_PROVIDER:-gemini}
