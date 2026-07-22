@@ -15,9 +15,13 @@ full-stack MVP:
 
 1. **Backend framework:** FastAPI (Python 3.11+) with async route handlers.
 2. **Message broker:** Eclipse Mosquitto with TLS 8883 and username/password auth.
+   **Node→edge discovery:** mDNS (`plant-hub.local`, advertised by Avahi on the
+   Pi; restricted to `wlan0,eth0` so docker bridge IPs are never published).
+   Firmware resolves the name first and falls back to the static IP in
+   `secrets.h`, because phone hotspots randomize their subnet on re-tether.
 3. **Cache / stream buffer:** Redis with ACL + persistence (AOF everysec).
 4. **Time-series DB:** InfluxDB 2.x; telemetry retention policy is defined in `edge-server/influxdb/config/`.
-5. **Inference runtime:** ONNX Runtime (CPU execution provider) on Pi 5, INT8 ResNet-18, 15-class PlantVillage.
+5. **Inference runtime:** ONNX Runtime (CPU execution provider) on Pi 5, INT8 ResNet-18. The whole-frame classifier is 15-class PlantVillage; the per-plant YOLO detector is trained on the 13 classes that have examples in the PlantDoc detection dataset (`Potato___healthy` and `Tomato__Target_Spot` are excluded due to zero labels). Detector training uses focal loss + inverse-frequency class weighting to address extreme class imbalance.
 6. **Agronomist chat:** Cloud LLM via raw `httpx` — Gemini (free tier) or Anthropic Claude, selected by `CHAT_PROVIDER`. The only outbound call; no local LLM, no SDK dependency.
 7. **Dashboard:** Flutter web; live updates over Server-Sent Events (`/api/v1/stream`).
 

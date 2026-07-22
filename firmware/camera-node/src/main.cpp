@@ -15,6 +15,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <HTTPClient.h>
 #include <esp_camera.h>
 #include "secrets.h"
@@ -131,6 +132,38 @@ bool wifi_connect() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Edge server discovery — mDNS first, static IP fallback.
+// Phone hotspots change subnet on every re-tether (Android randomizes it), so a
+// hardcoded API IP breaks each time. The Pi advertises plant-hub.local via
+// Avahi; resolving by name keeps the node working across IP changes. If the
+// lookup fails (hotspot client isolation / mDNS blocked), fall back to the
+// static host in API_BASE_URL.
+// ─────────────────────────────────────────────────────────────────────────────
+String g_api_base;   // API_BASE_URL with the host swapped for the resolved IP
+
+void resolve_edge_base() {
+    IPAddress ip;
+    if (MDNS.begin("pms-cam-node")) {
+        ip = MDNS.queryHost(EDGE_MDNS_NAME, 2000);
+        MDNS.end();
+    }
+    if ((uint32_t)ip == 0) {
+        Serial.printf("[mDNS] %s.local not found — using %s as-is\n",
+                      EDGE_MDNS_NAME, API_BASE_URL);
+        g_api_base = API_BASE_URL;
+        return;
+    }
+    Serial.printf("[mDNS] %s.local → %s\n", EDGE_MDNS_NAME, ip.toString().c_str());
+
+    String base = API_BASE_URL;
+    int start = base.indexOf("://") + 3;
+    int end   = base.indexOf(':', start);
+    if (end < 0) end = base.indexOf('/', start);
+    if (end < 0) end = base.length();
+    g_api_base = base.substring(0, start) + ip.toString() + base.substring(end);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Wake-up hello — POST /api/v1/node/{node_id}/hello
 // Idempotent pairing call so the dashboard card materialises even before the
 // first frame is uploaded (which can take a while on a marginal link).
@@ -139,7 +172,7 @@ bool wifi_connect() {
 // ─────────────────────────────────────────────────────────────────────────────
 void send_hello() {
     HTTPClient http;
-    String url = String(API_BASE_URL) + "/node/" + NODE_ID + "/hello";
+    String url = g_api_base + "/node/" + NODE_ID + "/hello";
     http.begin(url);
     http.addHeader("Authorization", "Bearer " + String(API_TOKEN));
     http.addHeader("Content-Type",  "application/json");
@@ -170,7 +203,7 @@ void send_hello() {
 // ─────────────────────────────────────────────────────────────────────────────
 bool upload_frame(const camera_fb_t *fb) {
     HTTPClient http;
-    String url = String(API_BASE_URL) + "/node/" + NODE_ID + "/upload-frame";
+    String url = g_api_base + "/node/" + NODE_ID + "/upload-frame";
 
     for (int attempt = 1; attempt <= UPLOAD_RETRY_COUNT; ++attempt) {
         http.begin(url);
@@ -227,6 +260,7 @@ void setup() {
     bool uploaded = false;
     if (quality >= BLUR_THRESHOLD) {
         if (wifi_connect()) {
+            resolve_edge_base();
             // Cold boot? Pair first so the card shows up even if the frame
             // upload fails on a marginal link.
             if (esp_reset_reason() != ESP_RST_DEEPSLEEP) {

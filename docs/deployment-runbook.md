@@ -68,7 +68,9 @@ Record the Pi's LAN IP (`hostname -I`) — the nodes need it.
 
 1. `cp firmware/soil-node/src/secrets.h.example firmware/soil-node/src/secrets.h`
 2. Fill in: `WIFI_SSID`, `WIFI_PASS`, `MQTT_HOST` (Pi IP), `SENSOR_PINS[]`,
-   `SENSOR_NODE_IDS[]`.
+   `SENSOR_NODE_IDS[]`. Keep `EDGE_MDNS_NAME` = the Pi's hostname
+   (`plant-hub` by default) — the node resolves it over mDNS first and only
+   uses `MQTT_HOST` if the lookup fails, so hotspot IP changes don't strand it.
 3. **Calibrate** each sensor: flash, open Serial Monitor (115200), note the raw
    ADC in dry air vs submerged in water, and set `MOISTURE_DRY` / `MOISTURE_WET`.
 4. `pio run -t upload` from `firmware/soil-node/`.
@@ -80,6 +82,8 @@ Record the Pi's LAN IP (`hostname -I`) — the nodes need it.
 1. `cp firmware/camera-node/src/secrets.h.example firmware/camera-node/src/secrets.h`
 2. Fill in: `WIFI_SSID`, `WIFI_PASS`, `API_BASE_URL` (`http://<pi-ip>:8000` on a
    trusted LAN, or `https://<pi-ip>` through nginx), `API_TOKEN`, `NODE_ID`.
+   Keep `EDGE_MDNS_NAME` = the Pi's hostname (`plant-hub`) — mDNS is tried
+   before the static `API_BASE_URL` host.
 3. Flash via an FTDI 3.3 V adapter (the ESP32-CAM has no USB port):
    `pio run -t upload`.
 4. Aim at the canopy. Verify frames upload and `/analyze` returns a label.

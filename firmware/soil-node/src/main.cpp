@@ -31,6 +31,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include "secrets.h"
@@ -128,10 +129,35 @@ bool wifi_connect() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Edge server discovery — mDNS first, static IP fallback.
+// Phone hotspots change subnet on every re-tether (Android randomizes it), so a
+// hardcoded broker IP breaks each time. The Pi advertises plant-hub.local via
+// Avahi; resolving by name keeps the node working across IP changes. If the
+// lookup fails (hotspot client isolation / mDNS blocked), fall back to the
+// static MQTT_HOST from secrets.h.
+// ─────────────────────────────────────────────────────────────────────────────
+IPAddress resolve_edge_ip() {
+    IPAddress ip;
+    if (MDNS.begin("pms-soil-node")) {
+        ip = MDNS.queryHost(EDGE_MDNS_NAME, 2000);
+        MDNS.end();
+    }
+    if ((uint32_t)ip == 0) {
+        Serial.printf("[mDNS] %s.local not found — falling back to %s\n",
+                      EDGE_MDNS_NAME, MQTT_HOST);
+        ip.fromString(MQTT_HOST);
+    } else {
+        Serial.printf("[mDNS] %s.local → %s\n",
+                      EDGE_MDNS_NAME, ip.toString().c_str());
+    }
+    return ip;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MQTT
 // ─────────────────────────────────────────────────────────────────────────────
 bool mqtt_connect() {
-    mqtt_client.setServer(MQTT_HOST, MQTT_PORT);
+    mqtt_client.setServer(resolve_edge_ip(), MQTT_PORT);
     mqtt_client.setKeepAlive(15);
 
     char client_id[64];
