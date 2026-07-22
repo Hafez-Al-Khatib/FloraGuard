@@ -29,7 +29,9 @@ services:
     container_name: pms-mosquitto
     restart: unless-stopped
     volumes:
-      - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      # Whole config dir: mosquitto.conf references password_file
+      # /mosquitto/config/passwd, which pi-setup.sh generates on the host.
+      - ./mosquitto/config:/mosquitto/config:ro
       - ./mosquitto/certs:/mosquitto/certs:ro
       - mosquitto-data:/mosquitto/data
       - mosquitto-log:/mosquitto/log
