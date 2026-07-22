@@ -63,7 +63,11 @@ services:
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN}
     volumes:
       - influxdb-data:/var/lib/influxdb2
-      - ./influxdb/config:/etc/influxdb2:ro
+      # NOTE: /etc/influxdb2 must stay writable — the one-time `influx setup`
+      # writes its CLI config (influx-configs) there. The repo config.yml only
+      # sets defaults (http-bind-address :8086, log-level info), so it is not
+      # bind-mounted; a read-only mount makes first-boot setup loop forever
+      # ("setup succeeded, but failed to write new config" → wipe → retry).
     ports:
       - "127.0.0.1:8086:8086"
     networks:
